@@ -264,7 +264,47 @@ def display_newspaper_results():
     
     st.markdown("---")
     
-    # 검색 기능
+    # 결과 표시 (검색 기능을 아래로 이동)
+    st.markdown(f"### 📰 {st.session_state['paper_date'].strftime('%Y년 %m월 %d일')}의 신문 게재 기사 모음")
+    st.markdown(f"**총 {len(articles)}개 기사**")
+    
+    if len(articles) == 0:
+        st.info("수집된 기사가 없습니다.")
+        return
+    
+    # 다운로드 기능을 상단으로 (기존 위치 유지)
+    st.markdown("### 💾 다운로드")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        excel_data = create_excel_download(articles)
+        st.download_button(
+            label="📊 엑셀 다운로드",
+            data=excel_data,
+            file_name=f"newspaper_articles_{st.session_state['paper_date'].strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="btn_download_newspaper_excel"
+        )
+    
+    with col2:
+        text_data = create_text_download(articles, st.session_state['paper_date'])
+        st.download_button(
+            label="📄 텍스트 다운로드",
+            data=text_data,
+            file_name=f"newspaper_articles_{st.session_state['paper_date'].strftime('%Y%m%d')}.txt",
+            mime="text/plain",
+            key="btn_download_newspaper_text"
+        )
+    
+    with col3:
+        if st.button("📋 클립보드 복사", key="btn_copy_newspaper_text"):
+            copy_text = create_text_download(articles, st.session_state['paper_date'])
+            st.code(copy_text, language="text")
+            st.success("✅ 텍스트가 준비되었습니다. 위 내용을 복사하세요.")
+    
+    st.markdown("---")
+    
+    # 검색 기능을 다운로드 아래로 이동
     st.markdown('<div class="search-box">', unsafe_allow_html=True)
     col1, col2, col3 = st.columns([3, 1, 1])
     
@@ -291,44 +331,6 @@ def display_newspaper_results():
     
     # 표시할 기사 결정
     display_articles = st.session_state.get('filtered_articles', articles)
-    
-    # 결과 표시
-    st.markdown(f"### 📰 {st.session_state['paper_date'].strftime('%Y년 %m월 %d일')}의 신문 게재 기사 모음")
-    st.markdown(f"**총 {len(display_articles)}개 기사**")
-    
-    if len(display_articles) == 0:
-        st.info("검색 결과가 없습니다.")
-        return
-    
-    # 다운로드 기능을 상단으로 이동
-    st.markdown("### 💾 다운로드")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        excel_data = create_excel_download(display_articles)
-        st.download_button(
-            label="📊 엑셀 다운로드",
-            data=excel_data,
-            file_name=f"newspaper_articles_{st.session_state['paper_date'].strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="btn_download_newspaper_excel"
-        )
-    
-    with col2:
-        text_data = create_text_download(display_articles, st.session_state['paper_date'])
-        st.download_button(
-            label="📄 텍스트 다운로드",
-            data=text_data,
-            file_name=f"newspaper_articles_{st.session_state['paper_date'].strftime('%Y%m%d')}.txt",
-            mime="text/plain",
-            key="btn_download_newspaper_text"
-        )
-    
-    with col3:
-        if st.button("📋 클립보드 복사", key="btn_copy_newspaper_text"):
-            copy_text = create_text_download(display_articles, st.session_state['paper_date'])
-            st.code(copy_text, language="text")
-            st.success("✅ 텍스트가 준비되었습니다. 위 내용을 복사하세요.")
     
     st.markdown("---")
     
