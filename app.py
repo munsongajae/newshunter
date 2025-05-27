@@ -357,7 +357,16 @@ def naver_search_tab():
         keyword = st.text_input("🔍 검색 키워드", placeholder="검색할 키워드를 입력하세요...", key="input_search_keyword")
     
     with col2:
-        max_articles = st.selectbox("최대 기사 수", [100, 500, 1000], index=0, key="select_max_articles")
+        # selectbox를 number_input으로 변경
+        max_articles = st.number_input(
+            "최대 기사 수", 
+            min_value=1, 
+            max_value=1000, 
+            value=100, 
+            step=1, 
+            key="input_max_articles",
+            help="1부터 1000까지 입력 가능합니다"
+        )
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
