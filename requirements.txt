@@ -5,4 +5,4 @@ requests
 beautifulsoup4
 lxml
 google-generativeai
-FinanceDataReader==0.9.50
+git+https://github.com/financedata-org/FinanceDataReader.git
