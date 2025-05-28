@@ -5,6 +5,4 @@ requests
 beautifulsoup4
 lxml
 google-generativeai
-yfinance
-pykrx
 FinanceDataReader
