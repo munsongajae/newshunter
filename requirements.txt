@@ -5,4 +5,4 @@ requests
 beautifulsoup4
 lxml
 google-generativeai
-FinanceDataReader
+FinanceDataReader==0.9.50
