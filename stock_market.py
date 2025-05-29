@@ -2,7 +2,7 @@ import streamlit as st
 import FinanceDataReader as fdr
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 def get_ticker_from_name(name):
     """종목명으로 티커 찾기"""
@@ -34,10 +34,13 @@ def get_ticker_from_name(name):
 def display_stock_market_tab():
     """주식시장 정보 표시"""
     st.title("📈 주요 지수 동향")
-    
+
+        # 한국 시간 설정
+    KST = timezone(timedelta(hours=9))
+    today = datetime.now(KST).date()
+        
     # 날짜 선택
     col1, col2 = st.columns(2)
-    today = datetime.today()
     with col1:
         start_date = st.date_input("시작일", today - timedelta(days=90))
     with col2:
