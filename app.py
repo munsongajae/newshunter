@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import io
 import base64
 from news_collector import NewsCollector
@@ -293,10 +293,13 @@ def newspaper_collection_tab():
     st.markdown("신문에 게재된 기사만 수집하여 제공합니다.")
     
     # 날짜 선택을 맨 위로 이동
+    KST = timezone(timedelta(hours=9))
+    current_date = datetime.now(KST).date()
+    
     selected_date = st.date_input(
         "📅 수집할 날짜 선택",
-        value=datetime.now().date(),
-        max_value=datetime.now().date(),
+        value=current_date,
+        max_value=current_date,
         help="수집하고 싶은 신문 발행일을 선택하세요",
         key="date_picker"
     )
