@@ -979,7 +979,7 @@ if missing_secrets:
     st.sidebar.warning(f"⚠️ 설정되지 않은 항목: {', '.join(missing_secrets)}")
     st.sidebar.info("일부 기능이 제한될 수 있습니다.")
 
-st.markdown('<h1 class="main-header">📰 신문 기사 수집기</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">📰 경제적 자유 프로젝트 </h1>', unsafe_allow_html=True)
 
 # 사이드바에 설정 정보 표시 (보안 정보 숨김)
 with st.sidebar:
