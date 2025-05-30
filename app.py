@@ -11,6 +11,11 @@ import json
 import requests
 from bs4 import BeautifulSoup
 from stock_market import display_stock_market_tab
+from pykrx import stock
+import time
+import plotly.graph_objects as go
+import numpy as np
+import os
 
 # 페이지 설정
 st.set_page_config(
@@ -661,6 +666,312 @@ def display_search_results():
                 st.markdown(f"**출처:** {article.get('source', '알 수 없음')}")
                 st.markdown(f"**링크:** [기사 보기]({article['link']})")
 
+def download_listed_companies():
+    """상장법인목록 다운로드 및 처리"""
+    try:
+        # KRX KIND 시스템 상장법인목록 URL
+        url = "https://kind.krx.co.kr/corpgeneral/corpList.do"
+        params = {
+            "method": "download",
+            "searchType": "13"
+        }
+        
+        # 파일 다운로드
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        
+        # HTML 파싱
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # 테이블 찾기
+        table = soup.find('table')
+        if not table:
+            raise ValueError("상장법인목록 테이블을 찾을 수 없습니다.")
+        
+        # 데이터 추출
+        data = []
+        rows = table.find_all('tr')[1:]  # 헤더 제외
+        
+        for row in rows:
+            cols = row.find_all('td')
+            if len(cols) >= 3:  # 최소 3개 컬럼 확인
+                stock_code = cols[1].text.strip()  # 종목코드
+                industry = cols[2].text.strip()    # 업종
+                main_product = cols[3].text.strip() if len(cols) > 3 else ''  # 주요제품
+                
+                data.append({
+                    '종목코드': stock_code,
+                    '업종': industry,
+                    '주요제품': main_product
+                })
+        
+        # DataFrame 생성
+        df = pd.DataFrame(data)
+        
+        # 종목코드 포맷팅
+        df['종목코드'] = df['종목코드'].astype(str).str.zfill(6)
+        
+        # CSV 파일로 저장
+        df.to_csv("listed_companies.csv", index=False, encoding='utf-8-sig')
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"상장법인목록 다운로드 중 오류 발생: {str(e)}")
+        # 기존 CSV 파일이 있으면 그것을 사용
+        if os.path.exists("listed_companies.csv"):
+            try:
+                df = pd.read_csv("listed_companies.csv", encoding='utf-8-sig')
+                df['종목코드'] = df['종목코드'].astype(str).str.zfill(6)
+                return df
+            except:
+                pass
+        return pd.DataFrame()
+
+def collect_market_data(market: str, date: str) -> pd.DataFrame:
+    """시장 데이터 수집"""
+    try:
+        # OHLCV 데이터 수집
+        df = stock.get_market_ohlcv_by_ticker(date, market=market)
+        time.sleep(0.5)  # API 호출 간 딜레이
+        
+        # 종목명 추가
+        df['종목명'] = df.index.map(lambda x: stock.get_market_ticker_name(x))
+        time.sleep(0.5)  # API 호출 간 딜레이
+        
+        # 시장구분 추가
+        df['시장구분'] = market
+        
+        # 시가총액 조회
+        market_cap = stock.get_market_cap_by_ticker(date, market=market)
+        time.sleep(0.5)  # API 호출 간 딜레이
+        
+        # 시가총액 정보 추가
+        df['시가총액'] = market_cap['시가총액']
+        df['상장주식수'] = market_cap['상장주식수']
+        
+        # 변동폭 계산
+        df['변동폭'] = df['고가'] - df['저가']
+        df['변동률'] = (df['변동폭'] / df['시가']) * 100
+        
+        # 상장법인목록 데이터 추가
+        listed_companies = download_listed_companies()
+        if not listed_companies.empty:
+            df = df.merge(listed_companies, left_index=True, right_on='종목코드', how='left')
+            df = df.drop('종목코드', axis=1)
+        else:
+            # 상장법인목록 데이터가 없는 경우 빈 컬럼 추가
+            df['업종'] = ''
+            df['주요제품'] = ''
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"{market} 데이터 수집 중 오류: {str(e)}")
+        return pd.DataFrame()
+
+def display_market_analysis(df: pd.DataFrame, date: datetime):
+    """시장 데이터 분석 결과 표시"""
+    st.success(f"✅ {len(df)}개 종목의 데이터를 조회했습니다!")
+    
+    # 요약 정보
+    st.markdown("### 📊 시장 요약")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("총 종목 수", f"{len(df):,}개")
+    with col2:
+        avg_trading_value = df['거래대금'].mean()
+        st.metric("평균 거래대금", f"{avg_trading_value/100000000:.0f}억원")
+    with col3:
+        st.metric("평균 시가총액", f"{df['시가총액'].mean()/100000000:.0f}억원")
+    with col4:
+        st.metric("평균 변동률", f"{df['변동률'].mean():.2f}%")
+    
+    # Top 30 종목 분석
+    st.markdown("### 🏆 Top 30 종목 분석")
+    
+    # 등락률 Top 30
+    st.markdown("#### 📈 등락률 Top 30")
+    top_change = df.nlargest(30, '등락률')
+    
+    # 등락률 Top 30 테이블
+    display_top_change = top_change.copy()
+    display_top_change['시가총액'] = display_top_change['시가총액'].apply(lambda x: f"{x/100000000:.0f}억원")
+    display_top_change['거래대금'] = display_top_change['거래대금'].apply(lambda x: f"{x/100000000:.0f}억원")
+    display_top_change['거래량'] = display_top_change['거래량'].apply(lambda x: f"{x:,}")
+    display_top_change['변동폭'] = display_top_change['변동폭'].apply(lambda x: f"{x:,}")
+    display_top_change['변동률'] = display_top_change['변동률'].apply(lambda x: f"{x:.2f}%")
+    
+    st.dataframe(
+        display_top_change[['종목명', '시장구분', '업종', '주요제품', '시가', '고가', '저가', '종가', 
+                          '거래량', '거래대금', '등락률', '변동폭', '변동률', '시가총액']],
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    st.markdown("---")
+    
+    # 거래대금 Top 30
+    st.markdown("#### 💰 거래대금 Top 30")
+    top_volume = df.nlargest(30, '거래대금')
+    
+    # 거래대금 Top 30 테이블
+    display_top_volume = top_volume.copy()
+    display_top_volume['시가총액'] = display_top_volume['시가총액'].apply(lambda x: f"{x/100000000:.0f}억원")
+    display_top_volume['거래대금'] = display_top_volume['거래대금'].apply(lambda x: f"{x/100000000:.0f}억원")
+    display_top_volume['거래량'] = display_top_volume['거래량'].apply(lambda x: f"{x:,}")
+    display_top_volume['변동폭'] = display_top_volume['변동폭'].apply(lambda x: f"{x:,}")
+    display_top_volume['변동률'] = display_top_volume['변동률'].apply(lambda x: f"{x:.2f}%")
+    
+    st.dataframe(
+        display_top_volume[['종목명', '시장구분', '업종', '주요제품', '시가', '고가', '저가', '종가', 
+                          '거래량', '거래대금', '등락률', '변동폭', '변동률', '시가총액']],
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    st.markdown("---")
+    
+    # 등락률 분포 차트
+    st.markdown("### 📈 등락률 분포")
+    fig = go.Figure(data=[go.Histogram(x=df['등락률'], nbinsx=50)])
+    fig.update_layout(
+        title="등락률 분포도",
+        xaxis_title="등락률 (%)",
+        yaxis_title="종목 수"
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # 시장별 종목 수
+    market_counts = df['시장구분'].value_counts()
+    fig = go.Figure(data=[go.Pie(
+        labels=market_counts.index,
+        values=market_counts.values,
+        hole=.3
+    )])
+    fig.update_layout(title="시장별 종목 분포")
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # 상세 데이터 표시
+    st.markdown("### 📋 종목 상세 정보")
+    
+    # 정렬 옵션
+    sort_column = st.selectbox(
+        "정렬 기준",
+        options=['종가', '거래량', '등락률', '시가총액', '변동률'],
+        index=3
+    )
+    
+    df = df.sort_values(by=sort_column, ascending=False)
+    
+    # 데이터 포맷팅
+    display_df = df.copy()
+    display_df['시가총액'] = display_df['시가총액'].apply(lambda x: f"{x/100000000:.0f}억원")
+    display_df['거래대금'] = display_df['거래대금'].apply(lambda x: f"{x/100000000:.0f}억원")
+    display_df['거래량'] = display_df['거래량'].apply(lambda x: f"{x:,}")
+    display_df['변동폭'] = display_df['변동폭'].apply(lambda x: f"{x:,}")
+    display_df['변동률'] = display_df['변동률'].apply(lambda x: f"{x:.2f}%")
+    
+    # 표시할 열 선택
+    columns_to_display = [
+        '종목명', '시장구분', '업종', '주요제품', '시가', '고가', '저가', '종가', 
+        '거래량', '거래대금', '등락률', '변동폭', '변동률', '시가총액'
+    ]
+    
+    # 데이터 테이블 표시
+    st.dataframe(
+        display_df[columns_to_display],
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    # CSV 다운로드
+    csv = df[columns_to_display].to_csv(index=False).encode('utf-8-sig')
+    st.download_button(
+        label="📥 CSV 다운로드",
+        data=csv,
+        file_name=f"stock_data_{date.strftime('%Y%m%d')}.csv",
+        mime="text/csv"
+    )
+
+def display_stock_data():
+    """전체 종목 시세 조회"""
+    st.markdown("### 📊 전체 종목 시세 조회")
+    
+    # 날짜 선택
+    today = datetime.now()
+    max_date = today.strftime("%Y%m%d")
+    
+    # 주말인 경우 금요일을 기본값으로
+    if today.weekday() >= 5:  # 5: 토요일, 6: 일요일
+        days_to_subtract = today.weekday() - 4
+        today = today - timedelta(days=days_to_subtract)
+    
+    # 날짜 선택 위젯
+    selected_date = st.date_input(
+        "조회 날짜",
+        value=today,
+        max_value=today,
+        help="조회할 날짜를 선택하세요"
+    )
+    
+    # 필터링 옵션
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        market_filter = st.multiselect(
+            "시장 선택",
+            options=['KOSPI', 'KOSDAQ'],
+            default=['KOSPI', 'KOSDAQ']
+        )
+    
+    with col2:
+        price_range = st.slider(
+            "주가 범위",
+            min_value=0,
+            max_value=1000000,
+            value=(0, 1000000),
+            step=1000
+        )
+    
+    with col3:
+        volume_filter = st.number_input(
+            "최소 거래량",
+            min_value=0,
+            value=0,
+            step=1000
+        )
+    
+    # 데이터 조회 버튼
+    if st.button("🔍 데이터 조회", type="primary"):
+        with st.spinner('데이터를 수집하는 중입니다...'):
+            try:
+                # KOSPI 데이터 수집
+                kospi_df = collect_market_data("KOSPI", selected_date.strftime("%Y%m%d"))
+                time.sleep(1)  # API 호출 간 딜레이
+                
+                # KOSDAQ 데이터 수집
+                kosdaq_df = collect_market_data("KOSDAQ", selected_date.strftime("%Y%m%d"))
+                
+                # 데이터 합치기
+                df = pd.concat([kospi_df, kosdaq_df])
+                
+                # 필터링
+                filtered_df = df[
+                    (df['시장구분'].isin(market_filter)) &
+                    (df['종가'].between(price_range[0], price_range[1])) &
+                    (df['거래량'] >= volume_filter)
+                ]
+                
+                if len(filtered_df) > 0:
+                    display_market_analysis(filtered_df, selected_date)
+                else:
+                    st.warning("선택한 조건에 해당하는 종목이 없습니다.")
+                
+            except Exception as e:
+                st.error(f"데이터 조회 중 오류가 발생했습니다: {str(e)}")
+
 # secrets 확인 (보안)
 api_available, missing_secrets = check_secrets()
 
@@ -714,7 +1025,7 @@ with st.sidebar:
         st.metric("검색된 기사", len(st.session_state['search_articles']))
 
 # 탭 생성
-tab1, tab2, tab3 = st.tabs(["📰 신문 게재 기사 수집", "🔍 네이버 뉴스 검색", "📈 오늘의 증시"])
+tab1, tab2, tab3, tab4 = st.tabs(["📰 신문 게재 기사 수집", "🔍 네이버 뉴스 검색", "📈 오늘의 증시", "📊 전체 종목 시세"])
 
 with tab1:
     newspaper_collection_tab()
@@ -724,3 +1035,6 @@ with tab2:
     
 with tab3:
     display_stock_market_tab()
+
+with tab4:
+    display_stock_data()
