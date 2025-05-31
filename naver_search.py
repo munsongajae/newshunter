@@ -1,11 +1,12 @@
 import requests
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import streamlit as st
 import re
 from urllib.parse import quote
 from bs4 import BeautifulSoup
+import pandas as pd
 
 class NaverNewsSearcher:
     def __init__(self):
@@ -214,3 +215,249 @@ class NaverNewsSearcher:
                 return '기타'
         except:
             return '알 수 없음'
+
+    def search_stock_news(self, keywords, selected_date, max_articles):
+        """특징주 관련 뉴스 검색"""
+        try:
+            # max_articles가 100을 초과하면 100으로 제한
+            max_articles = min(max_articles, 100)
+            
+            all_results = []
+            
+            # 각 키워드별로 검색
+            for keyword in keywords:
+                # API 호출 파라미터 설정
+                params = {
+                    "query": keyword,
+                    "display": max_articles,  # 제한된 기사 수 사용
+                    "start": 1,
+                    "sort": "date"   # 최신순 정렬
+                }
+                
+                # API 호출
+                headers = {
+                    'X-Naver-Client-Id': self.client_id,
+                    'X-Naver-Client-Secret': self.client_secret
+                }
+                
+                response = requests.get(self.base_url, headers=headers, params=params)
+                response.raise_for_status()
+                
+                # 응답 파싱
+                data = response.json()
+                items = data.get("items", [])
+                
+                # 기사 정보 추출
+                for item in items:
+                    # HTML 태그 제거
+                    title = re.sub(r'<[^>]+>', '', item.get("title", ""))
+                    description = re.sub(r'<[^>]+>', '', item.get("description", ""))
+                    
+                    # 발행일 파싱
+                    pub_date = item.get("pubDate", "")
+                    try:
+                        pub_date = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S +0900")
+                    except ValueError:
+                        continue
+                    
+                    all_results.append({
+                        "title": title,
+                        "description": description,
+                        "link": item.get("link", ""),
+                        "pubDate": pub_date
+                    })
+                
+                time.sleep(0.1)  # API 호출 간격 조절
+            
+            # 중복 제거 (제목 기준)
+            seen_titles = set()
+            unique_results = []
+            for result in all_results:
+                if result['title'] not in seen_titles:
+                    seen_titles.add(result['title'])
+                    unique_results.append(result)
+            
+            # 발행일 기준으로 정렬
+            unique_results.sort(key=lambda x: x['pubDate'], reverse=True)
+            
+            return unique_results  # 모든 중복 제거된 결과 반환
+            
+        except Exception as e:
+            st.error(f"뉴스 검색 중 오류 발생: {str(e)}")
+            return []
+
+def display_stock_news_tab():
+    """특징주 포착 탭 표시"""
+    st.markdown("### 📈 특징주 포착")
+    
+    # 검색 키워드 선택
+    default_keywords = ["특징주", "급등주", "상한가", "급등세", "급락세", 
+                       "강세", "약세", "거래량 증가", "신고가", "신저가"]
+    
+    # 사용자 정의 키워드 입력
+    custom_keyword = st.text_input(
+        "추가 검색 키워드 입력",
+        help="원하는 검색 키워드를 입력하세요. 입력 후 Enter를 누르면 키워드가 추가됩니다."
+    )
+    
+    # 사용자 정의 키워드가 입력되면 default_keywords에 추가
+    if custom_keyword and custom_keyword not in default_keywords:
+        default_keywords.append(custom_keyword)
+    
+    # 키워드 선택 (기본 키워드 + 사용자 정의 키워드)
+    selected_keywords = st.multiselect(
+        "검색 키워드 선택(10개 이하)",
+        options=default_keywords,
+        default=default_keywords[:3]
+    )
+    
+    # 조회 날짜 선택 (시장 데이터용)
+    today = datetime.now()
+    # 주말인 경우 금요일을 기본값으로
+    if today.weekday() >= 5:  # 5: 토요일, 6: 일요일
+        days_to_subtract = today.weekday() - 4
+        today = today - timedelta(days=days_to_subtract)
+    
+    selected_date = st.date_input(
+        "시장 데이터 조회 날짜",
+        value=today,
+        max_value=today,
+        help="시장 데이터를 조회할 날짜를 선택하세요"
+    )
+    
+    # 최대 기사 수 입력
+    max_articles = st.number_input(
+        "최대 기사 수(100개 이하)",
+        min_value=10,
+        max_value=1000,
+        value=100,
+        step=10
+    )
+    
+    if st.button("🔍 검색 시작", type="primary"):
+        with st.spinner("뉴스 검색 및 분석 중..."):
+            # 1. 뉴스 검색 (날짜 제한 없음)
+            searcher = NaverNewsSearcher()
+            articles = searcher.search_stock_news(selected_keywords, selected_date, max_articles)
+            
+            # 키워드별 기사 수 계산
+            keyword_article_counts = {}
+            for keyword in selected_keywords:
+                count = sum(1 for article in articles if keyword in article['title'] or keyword in article['description'])
+                keyword_article_counts[keyword] = count
+            
+            # 2. 시장 데이터 수집 (선택한 날짜 기준)
+            market_data = {}
+            all_stock_names = set()  # 모든 종목명을 저장할 set
+            
+            for market in ['KOSPI', 'KOSDAQ']:
+                try:
+                    # app.py의 collect_market_data 함수를 import하여 사용
+                    from app import collect_market_data
+                    df = collect_market_data(market, selected_date.strftime("%Y%m%d"))
+                    market_data[market] = df
+                    # 시장 데이터에서 종목명 추출
+                    all_stock_names.update(df['종목명'].tolist())
+                except Exception as e:
+                    st.error(f"{market} 데이터 수집 중 오류: {str(e)}")
+            
+            # 3. 뉴스 기사에서 종목명 매칭
+            stock_articles = {}  # 종목별 기사를 저장할 딕셔너리
+            stock_keywords = {}  # 종목별 매칭된 키워드를 저장할 딕셔너리
+            matched_stocks = set()  # 매칭된 종목을 추적하기 위한 set
+            
+            for article in articles:
+                # 기사 제목과 내용에서 종목명 찾기
+                text = article['title'] + " " + article['description']
+                
+                # 기사에 포함된 키워드 찾기
+                matched_keywords = [keyword for keyword in selected_keywords if keyword in text]
+                
+                # 시장 데이터의 모든 종목명과 매칭
+                for stock_name in all_stock_names:
+                    if stock_name in text:
+                        if stock_name not in stock_articles:
+                            stock_articles[stock_name] = []
+                            stock_keywords[stock_name] = set()
+                        stock_articles[stock_name].append(article)
+                        stock_keywords[stock_name].update(matched_keywords)
+                        matched_stocks.add(stock_name)
+            
+            # 4. 결과 생성
+            results = []
+            for stock_name, articles in stock_articles.items():
+                # 해당 종목의 시장 데이터 찾기
+                for market, df in market_data.items():
+                    stock_data = df[df['종목명'] == stock_name]
+                    if not stock_data.empty:
+                        stock = stock_data.iloc[0]
+                        # 결과 데이터 구성
+                        result = {
+                            '종목명': stock['종목명'],
+                            '시장구분': market,
+                            '업종': stock['업종'],
+                            '주요제품': stock['주요제품'],
+                            '현재가': stock['종가'],
+                            '등락률': stock['등락률'],
+                            '거래량': stock['거래량'],
+                            '시가총액': stock['시가총액'],
+                            '관련기사수': len(articles),
+                            '매칭키워드': ', '.join(sorted(stock_keywords[stock_name]))
+                        }
+                        
+                        # 기사 정보 추가 (최대 3개)
+                        for i, article in enumerate(articles[:3], 1):
+                            result.update({
+                                f'기사제목{i}': article['title'],
+                                f'기사요약{i}': article['description'],
+                                f'기사링크{i}': article['link']
+                            })
+                        
+                        results.append(result)
+            
+            # 5. 검색 결과 통계 표시
+            st.markdown("### 📊 검색 결과 통계")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### 키워드별 기사 수")
+                for keyword, count in keyword_article_counts.items():
+                    st.write(f"- {keyword}: {count}개")
+            
+            with col2:
+                st.markdown("#### 매칭된 종목 수")
+                st.write(f"- 총 {len(matched_stocks)}개 종목이 매칭되었습니다.")
+                # 종목별 기사 수 분포
+                article_counts = [len(articles) for articles in stock_articles.values()]
+                if article_counts:
+                    st.write(f"- 평균 {sum(article_counts)/len(article_counts):.1f}개의 기사가 매칭되었습니다.")
+                    st.write(f"- 최대 {max(article_counts)}개의 기사가 매칭된 종목이 있습니다.")
+            
+            # 6. 결과 표시
+            if results:
+                st.markdown("### 📈 매칭된 종목 정보")
+                df_results = pd.DataFrame(results)
+                
+                # 데이터 포맷팅
+                df_results['현재가'] = df_results['현재가'].apply(lambda x: f"{x:,}원")
+                df_results['등락률'] = df_results['등락률'].apply(lambda x: f"{x:.2f}%")
+                df_results['거래량'] = df_results['거래량'].apply(lambda x: f"{x:,}")
+                df_results['시가총액'] = df_results['시가총액'].apply(lambda x: f"{x/100000000:.0f}억원")
+                
+                # 결과 테이블 표시
+                st.dataframe(
+                    df_results,
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                # CSV 다운로드
+                csv = df_results.to_csv(index=False).encode('utf-8-sig')
+                st.download_button(
+                    label="📥 CSV 다운로드",
+                    data=csv,
+                    file_name=f"stock_news_{selected_date.strftime('%Y%m%d')}.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.warning("검색 결과가 없습니다.")

@@ -17,6 +17,8 @@ import plotly.graph_objects as go
 import numpy as np
 import os
 import FinanceDataReader as fdr
+from streamlit_option_menu import option_menu
+import re
 
 # 페이지 설정
 st.set_page_config(
@@ -109,6 +111,17 @@ st.markdown("""
     }
     .ai-report li {
         margin-bottom: 0.5rem;
+    }
+    /* 사이드바 메뉴 스타일링 */
+    .css-1d391kg {
+        padding: 0.5rem 0;
+    }
+    .css-1d391kg .stRadio > div {
+        padding: 0.5rem 1rem;
+    }
+    .css-1d391kg .stRadio > div:hover {
+        background-color: #f0f2f6;
+        border-radius: 5px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -328,7 +341,7 @@ def create_ai_report_download(articles, date):
 
 def newspaper_collection_tab():
     st.markdown("### 신문 게재 기사 수집")
-    st.markdown("신문에 게재된 기사만 수집하여 제공합니다.")
+    st.markdown("종이 신문에 실제로 실린 기사만 수집하여 제공합니다.")
     
     # 날짜 선택을 맨 위로 이동
     KST = timezone(timedelta(hours=9))
@@ -1185,6 +1198,192 @@ def display_stock_market_tab():
         except Exception as e:
             st.error(f"{code_input} 데이터 조회 중 오류가 발생했습니다: {e}")
 
+def extract_stock_names(text):
+    """텍스트에서 종목명 추출"""
+    # 종목명 패턴 (한글 2-10자)
+    pattern = r'[가-힣]{2,10}(?:주식|증권|기업|회사|주)'
+    matches = re.findall(pattern, text)
+    return [match.replace('주식', '').replace('증권', '').replace('기업', '').replace('회사', '').replace('주', '') for match in matches]
+
+
+def search_stock_news(keywords, start_date, end_date, max_articles):
+    """특징주 관련 뉴스 검색"""
+    searcher = NaverNewsSearcher()
+    return searcher.search_stock_news(keywords, start_date, max_articles)
+
+def display_stock_news_tab():
+    """특징주 포착 탭 표시"""
+    st.markdown("### 📈 특징주 포착")
+    
+    # 검색 키워드 선택
+    default_keywords = ["특징주", "급등주", "상한가", "급등세", "급락세", 
+                       "강세", "약세", "거래량 증가", "신고가", "신저가"]
+    
+    # 사용자 정의 키워드 입력
+    custom_keyword = st.text_input(
+        "추가 검색 키워드 입력",
+        help="원하는 검색 키워드를 입력하세요. 입력 후 Enter를 누르면 키워드가 추가됩니다."
+    )
+    
+    # 사용자 정의 키워드가 입력되면 default_keywords에 추가
+    if custom_keyword and custom_keyword not in default_keywords:
+        default_keywords.append(custom_keyword)
+    
+    # 키워드 선택 (기본 키워드 + 사용자 정의 키워드)
+    selected_keywords = st.multiselect(
+        "검색 키워드 선택",
+        options=default_keywords,
+        default=default_keywords[:3]
+    )
+    
+    # 조회 날짜 선택
+    today = datetime.now()
+    # 주말인 경우 금요일을 기본값으로
+    if today.weekday() >= 5:  # 5: 토요일, 6: 일요일
+        days_to_subtract = today.weekday() - 4
+        today = today - timedelta(days=days_to_subtract)
+    
+    selected_date = st.date_input(
+        "조회 날짜",
+        value=today,
+        max_value=today,
+        help="조회할 날짜를 선택하세요"
+    )
+    
+    # 최대 기사 수 입력
+    max_articles = st.number_input(
+        "최대 기사 수",
+        min_value=10,
+        max_value=1000,
+        value=100,
+        step=10
+    )
+    
+    if st.button("🔍 검색 시작", type="primary"):
+        with st.spinner("뉴스 검색 및 분석 중..."):
+            # 1. 뉴스 검색
+            articles = search_stock_news(selected_keywords, selected_date, None, max_articles)
+            
+            # 키워드별 기사 수 계산
+            keyword_article_counts = {}
+            for keyword in selected_keywords:
+                count = sum(1 for article in articles if keyword in article['title'] or keyword in article['description'])
+                keyword_article_counts[keyword] = count
+            
+            # 2. 시장 데이터 수집 (선택한 날짜 기준)
+            market_data = {}
+            all_stock_names = set()  # 모든 종목명을 저장할 set
+            
+            for market in ['KOSPI', 'KOSDAQ']:
+                try:
+                    df = collect_market_data(market, selected_date.strftime("%Y%m%d"))
+                    market_data[market] = df
+                    # 시장 데이터에서 종목명 추출
+                    all_stock_names.update(df['종목명'].tolist())
+                except Exception as e:
+                    st.error(f"{market} 데이터 수집 중 오류: {str(e)}")
+            
+            # 3. 뉴스 기사에서 종목명 매칭
+            stock_articles = {}  # 종목별 기사를 저장할 딕셔너리
+            stock_keywords = {}  # 종목별 매칭된 키워드를 저장할 딕셔너리
+            matched_stocks = set()  # 매칭된 종목을 추적하기 위한 set
+            
+            for article in articles:
+                # 기사 제목과 내용에서 종목명 찾기
+                text = article['title'] + " " + article['description']
+                
+                # 기사에 포함된 키워드 찾기
+                matched_keywords = [keyword for keyword in selected_keywords if keyword in text]
+                
+                # 시장 데이터의 모든 종목명과 매칭
+                for stock_name in all_stock_names:
+                    if stock_name in text:
+                        if stock_name not in stock_articles:
+                            stock_articles[stock_name] = []
+                            stock_keywords[stock_name] = set()
+                        stock_articles[stock_name].append(article)
+                        stock_keywords[stock_name].update(matched_keywords)
+                        matched_stocks.add(stock_name)
+            
+            # 4. 결과 생성
+            results = []
+            for stock_name, articles in stock_articles.items():
+                # 해당 종목의 시장 데이터 찾기
+                for market, df in market_data.items():
+                    stock_data = df[df['종목명'] == stock_name]
+                    if not stock_data.empty:
+                        stock = stock_data.iloc[0]
+                        # 결과 데이터 구성
+                        result = {
+                            '종목명': stock['종목명'],
+                            '시장구분': market,
+                            '업종': stock['업종'],
+                            '주요제품': stock['주요제품'],  # 주요제품 컬럼 추가
+                            '현재가': stock['종가'],
+                            '등락률': stock['등락률'],
+                            '거래량': stock['거래량'],
+                            '시가총액': stock['시가총액'],
+                            '관련기사수': len(articles),
+                            '매칭키워드': ', '.join(sorted(stock_keywords[stock_name]))
+                        }
+                        
+                        # 기사 정보 추가 (최대 3개)
+                        for i, article in enumerate(articles[:3], 1):
+                            result.update({
+                                f'기사제목{i}': article['title'],
+                                f'기사요약{i}': article['description'],
+                                f'기사링크{i}': article['link']
+                            })
+                        
+                        results.append(result)
+            
+            # 5. 검색 결과 통계 표시
+            st.markdown("### 📊 검색 결과 통계")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### 키워드별 기사 수")
+                for keyword, count in keyword_article_counts.items():
+                    st.write(f"- {keyword}: {count}개")
+            
+            with col2:
+                st.markdown("#### 매칭된 종목 수")
+                st.write(f"- 총 {len(matched_stocks)}개 종목이 매칭되었습니다.")
+                # 종목별 기사 수 분포
+                article_counts = [len(articles) for articles in stock_articles.values()]
+                if article_counts:
+                    st.write(f"- 평균 {sum(article_counts)/len(article_counts):.1f}개의 기사가 매칭되었습니다.")
+                    st.write(f"- 최대 {max(article_counts)}개의 기사가 매칭된 종목이 있습니다.")
+            
+            # 6. 결과 표시
+            if results:
+                st.markdown("### 📈 매칭된 종목 정보")
+                df_results = pd.DataFrame(results)
+                
+                # 데이터 포맷팅
+                df_results['현재가'] = df_results['현재가'].apply(lambda x: f"{x:,}원")
+                df_results['등락률'] = df_results['등락률'].apply(lambda x: f"{x:.2f}%")
+                df_results['거래량'] = df_results['거래량'].apply(lambda x: f"{x:,}")
+                df_results['시가총액'] = df_results['시가총액'].apply(lambda x: f"{x/100000000:.0f}억원")
+                
+                # 결과 테이블 표시
+                st.dataframe(
+                    df_results,
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                # CSV 다운로드
+                csv = df_results.to_csv(index=False).encode('utf-8-sig')
+                st.download_button(
+                    label="📥 CSV 다운로드",
+                    data=csv,
+                    file_name=f"stock_news_{selected_date.strftime('%Y%m%d')}.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.warning("검색 결과가 없습니다.")
+
 # secrets 확인 (보안)
 api_available, missing_secrets = check_secrets()
 
@@ -1194,20 +1393,46 @@ if missing_secrets:
 
 st.markdown('<h1 class="main-header">📰 경제적 자유 프로젝트 </h1>', unsafe_allow_html=True)
 
-# 사이드바에 설정 정보 표시 (보안 정보 숨김)
+# 사이드바 메뉴
 with st.sidebar:
-    st.markdown("### ⚙️ 설정 정보")
-    
-    # API 키 값을 노출하지 않고 상태만 표시
-    api_status = "✅ 설정됨" if api_available else "❌ 미설정"
-    st.info(f"네이버 API: {api_status}")
-    
-    # 기타 설정 정보 (민감하지 않은 정보만)
-    try:
-        max_articles = st.secrets["app_settings"]["max_articles_per_request"]
-        st.info(f"최대 요청 기사 수: {max_articles}")
-    except:
-        st.info("기본 설정 사용 중")
+    selected = option_menu(
+        menu_title="메뉴",
+        options=[
+            "신문 게재 기사 수집",
+            "네이버 뉴스 검색",
+            "오늘의 증시",
+            "전체 종목 시세",
+            "특징주 포착"
+        ],
+        icons=[
+            "newspaper",
+            "search",
+            "graph-up",
+            "bar-chart",
+            "bullseye"  # target을 bullseye로 변경
+        ],
+        menu_icon="list",
+        default_index=0,
+        styles={
+            "container": {"padding": "0!important", "background-color": "transparent"},
+            "icon": {"color": "white", "font-size": "16px"},
+            "nav-link": {
+                "font-size": "16px",
+                "text-align": "left",
+                "margin": "0px",
+                "padding": "10px",
+                "color": "white",
+                "background-color": "transparent",
+                "border": "none",
+                "border-radius": "0px",
+            },
+            "nav-link-selected": {
+                "background-color": "#4CAF50",
+                "color": "white",
+                "font-weight": "bold",
+            },
+        }
+    )
     
     st.markdown("---")
     st.markdown("### 📖 사용법")
@@ -1225,23 +1450,38 @@ with st.sidebar:
         
     **오늘의 증시:**
     1. 주요 지수 동향 
-    2. 시장별 거래 실적 
-    3. 환율 및 원자재 동향 
-    4. 개별 종목 차트 검색 
-    5. 종목 기술적 지표 검색 
+    2. 환율 및 원자재 동향 
+    3. 개별 종목 차트 검색 
+    4. 종목 기술적 지표 검색
+                
+    **특징주 포착:**
+    1. 키워드 입력
+    2. 최대 기사 수 선택
+    3. 검색 시작
     """)
-
-# 탭 생성
-tab1, tab2, tab3, tab4 = st.tabs(["📰 신문 게재 기사 수집", "🔍 네이버 뉴스 검색", "📈 오늘의 증시", "📊 전체 종목 시세"])
-
-with tab1:
-    newspaper_collection_tab()
-
-with tab2:
-    naver_search_tab()
     
-with tab3:
-    display_stock_market_tab()
+    st.markdown("---")
+    st.markdown("### ⚙️ 설정 정보")
+    
+    # API 키 값을 노출하지 않고 상태만 표시
+    api_status = "✅ 설정됨" if api_available else "❌ 미설정"
+    st.info(f"네이버 API: {api_status}")
+    
+    # 기타 설정 정보 (민감하지 않은 정보만)
+    try:
+        max_articles = st.secrets["app_settings"]["max_articles_per_request"]
+        st.info(f"최대 요청 기사 수: {max_articles}")
+    except:
+        st.info("기본 설정 사용 중")
 
-with tab4:
+# 선택된 탭에 따라 해당 함수 실행
+if selected == "신문 게재 기사 수집":
+    newspaper_collection_tab()
+elif selected == "네이버 뉴스 검색":
+    naver_search_tab()
+elif selected == "오늘의 증시":
+    display_stock_market_tab()
+elif selected == "전체 종목 시세":
     display_stock_data()
+elif selected == "특징주 포착":
+    display_stock_news_tab()
