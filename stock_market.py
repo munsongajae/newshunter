@@ -3,6 +3,7 @@ import FinanceDataReader as fdr
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta, timezone
+from pykrx import stock
 
 def get_ticker_from_name(name):
     """종목명으로 티커 찾기"""
@@ -31,11 +32,66 @@ def get_ticker_from_name(name):
         st.warning(f"종목 검색 중 오류가 발생했습니다: {e}")
         return None
 
+def display_trading_value(start_date, end_date):
+    """거래실적 데이터 표시"""
+    try:
+        # 날짜 형식 변환
+        start_date_str = start_date.strftime("%Y%m%d")
+        end_date_str = end_date.strftime("%Y%m%d")
+        
+        # 코스피 거래실적
+        kospi_trading = stock.get_market_trading_value_by_date(start_date_str, end_date_str, "KOSPI")
+        # 코스닥 거래실적
+        kosdaq_trading = stock.get_market_trading_value_by_date(start_date_str, end_date_str, "KOSDAQ")
+        
+        # 거래실적 표시
+        st.markdown("#### 💰 거래실적")
+        
+        if not kospi_trading.empty and not kosdaq_trading.empty:
+            # KOSPI와 KOSDAQ 거래실적 (종료일 데이터만)
+            kospi_data = kospi_trading.iloc[-1]
+            kosdaq_data = kosdaq_trading.iloc[-1]
+            
+            # KOSPI 거래실적
+            st.markdown("##### KOSPI")
+            col1, col2, col3, col4, col5 = st.columns(5)
+            with col1:
+                st.metric("기관", f"{kospi_data['기관합계']/100000000:,.0f}억원")
+            with col2:
+                st.metric("기타법인", f"{kospi_data['기타법인']/100000000:,.0f}억원")
+            with col3:
+                st.metric("개인", f"{kospi_data['개인']/100000000:,.0f}억원")
+            with col4:
+                st.metric("외국인", f"{kospi_data['외국인합계']/100000000:,.0f}억원")
+            with col5:
+                st.metric("전체", f"{kospi_data['전체']/100000000:,.0f}억원")
+            
+            # KOSDAQ 거래실적
+            st.markdown("##### KOSDAQ")
+            col1, col2, col3, col4, col5 = st.columns(5)
+            with col1:
+                st.metric("기관", f"{kosdaq_data['기관합계']/100000000:,.0f}억원")
+            with col2:
+                st.metric("기타법인", f"{kosdaq_data['기타법인']/100000000:,.0f}억원")
+            with col3:
+                st.metric("개인", f"{kosdaq_data['개인']/100000000:,.0f}억원")
+            with col4:
+                st.metric("외국인", f"{kosdaq_data['외국인합계']/100000000:,.0f}억원")
+            with col5:
+                st.metric("전체", f"{kosdaq_data['전체']/100000000:,.0f}억원")
+        else:
+            st.info("거래실적 데이터가 없습니다.")
+        
+        st.markdown("---")
+        
+    except Exception as e:
+        st.error(f"거래실적 데이터 수집 중 오류 발생: {str(e)}")
+
 def display_stock_market_tab():
     """주식시장 정보 표시"""
     st.title("📈 주요 지수 동향")
 
-        # 한국 시간 설정
+    # 한국 시간 설정
     KST = timezone(timedelta(hours=9))
     today = datetime.now(KST).date()
         
