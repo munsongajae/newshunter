@@ -10,12 +10,13 @@ from typing import List, Dict
 import json
 import requests
 from bs4 import BeautifulSoup
-from stock_market import display_stock_market_tab
+from stock_market import display_stock_market_tab, get_ticker_from_name, display_trading_value
 from pykrx import stock
 import time
 import plotly.graph_objects as go
 import numpy as np
 import os
+import FinanceDataReader as fdr
 
 # 페이지 설정
 st.set_page_config(
@@ -24,6 +25,26 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# 세션 상태 초기화
+if 'newspaper_articles' not in st.session_state:
+    st.session_state['newspaper_articles'] = None
+if 'paper_date' not in st.session_state:
+    st.session_state['paper_date'] = None
+if 'search_articles' not in st.session_state:
+    st.session_state['search_articles'] = None
+if 'current_search_keyword' not in st.session_state:
+    st.session_state['current_search_keyword'] = None
+if 'filtered_articles' not in st.session_state:
+    st.session_state['filtered_articles'] = None
+if 'ai_report' not in st.session_state:
+    st.session_state['ai_report'] = None
+if 'stock_data' not in st.session_state:
+    st.session_state['stock_data'] = None
+if 'stock_date' not in st.session_state:
+    st.session_state['stock_date'] = None
+if 'stock_filtered_data' not in st.session_state:
+    st.session_state['stock_filtered_data'] = None
 
 # CSS 스타일링
 st.markdown("""
@@ -121,6 +142,12 @@ def remove_duplicates(articles):
 
 def create_excel_download(articles):
     """엑셀 파일 생성"""
+    if articles is None:
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            pd.DataFrame().to_excel(writer, index=False)
+        return output.getvalue()
+        
     df = pd.DataFrame(articles)
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -129,6 +156,9 @@ def create_excel_download(articles):
 
 def create_text_download(articles, date):
     """텍스트 파일 생성"""
+    if articles is None:
+        return "수집된 기사가 없습니다."
+        
     text_content = f"📰 {date.strftime('%Y년 %m월 %d일')}의 신문 게재 기사 모음\n\n"
     
     newspaper_groups = {}
@@ -287,8 +317,11 @@ def generate_ai_report(articles: List[Dict], date: datetime) -> str:
     except Exception as e:
         return f"보고서 생성 중 오류가 발생했습니다: {str(e)}"
 
-def create_ai_report_download(articles: List[Dict], date: datetime) -> str:
+def create_ai_report_download(articles, date):
     """AI 보고서 텍스트 파일 생성"""
+    if articles is None:
+        return "수집된 기사가 없습니다."
+        
     report_content = f"📊 {date.strftime('%Y년 %m월 %d일')} 신문 기사 AI 요약 보고서\n\n"
     report_content += generate_ai_report(articles, date)
     return report_content
@@ -429,11 +462,21 @@ def newspaper_collection_tab():
 
 def display_newspaper_results():
     articles = st.session_state['newspaper_articles']
+    paper_date = st.session_state['paper_date']
     
     st.markdown("---")
     
+    # articles가 None이면 함수 종료
+    if articles is None:
+        st.info("수집된 기사가 없습니다. 신문사를 선택하고 크롤링을 시작해주세요.")
+        return
+    
     # 결과 표시 (검색 기능을 아래로 이동)
-    st.markdown(f"### 📰 {st.session_state['paper_date'].strftime('%Y년 %m월 %d일')}의 신문 게재 기사 모음")
+    if paper_date is not None:
+        st.markdown(f"### 📰 {paper_date.strftime('%Y년 %m월 %d일')}의 신문 게재 기사 모음")
+    else:
+        st.markdown("### 📰 신문 게재 기사 모음")
+    
     st.markdown(f"**총 {len(articles)}개 기사**")
     
     if len(articles) == 0:
@@ -471,6 +514,10 @@ def display_newspaper_results():
     # 표시할 기사 결정
     display_articles = st.session_state.get('filtered_articles', articles)
     
+    # display_articles가 None이면 articles 사용
+    if display_articles is None:
+        display_articles = articles
+    
     # 다운로드 기능을 검색 기능 아래로 이동
     st.markdown("### 💾 다운로드")
     col1, col2, col3, col4 = st.columns(4)
@@ -480,31 +527,31 @@ def display_newspaper_results():
         st.download_button(
             label="📊 엑셀 다운로드",
             data=excel_data,
-            file_name=f"newspaper_articles_{st.session_state['paper_date'].strftime('%Y%m%d')}.xlsx",
+            file_name=f"newspaper_articles_{paper_date.strftime('%Y%m%d') if paper_date else datetime.now().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="btn_download_newspaper_excel"
         )
     
     with col2:
-        text_data = create_text_download(display_articles, st.session_state['paper_date'])
+        text_data = create_text_download(display_articles, paper_date if paper_date else datetime.now())
         st.download_button(
             label="📄 텍스트 다운로드",
             data=text_data,
-            file_name=f"newspaper_articles_{st.session_state['paper_date'].strftime('%Y%m%d')}.txt",
+            file_name=f"newspaper_articles_{paper_date.strftime('%Y%m%d') if paper_date else datetime.now().strftime('%Y%m%d')}.txt",
             mime="text/plain",
             key="btn_download_newspaper_text"
         )
     
     with col3:
         if st.button("📋 클립보드 복사", key="btn_copy_newspaper_text"):
-            copy_text = create_text_download(display_articles, st.session_state['paper_date'])
+            copy_text = create_text_download(display_articles, paper_date if paper_date else datetime.now())
             st.code(copy_text, language="text")
             st.success("✅ 텍스트가 준비되었습니다. 위 내용을 복사하세요.")
     
     with col4:
         if st.button("🤖 AI 보고서 생성", key="btn_generate_ai_report"):
             with st.spinner("AI가 기사를 분석하고 보고서를 생성하는 중..."):
-                report_text = create_ai_report_download(display_articles, st.session_state['paper_date'])
+                report_text = create_ai_report_download(display_articles, paper_date if paper_date else datetime.now())
                 st.session_state['ai_report'] = report_text
                 st.success("✅ AI 보고서가 생성되었습니다.")
                 st.rerun()
@@ -512,13 +559,13 @@ def display_newspaper_results():
     st.markdown("---")
     
     # AI 보고서가 있으면 표시
-    if 'ai_report' in st.session_state:
+    if 'ai_report' in st.session_state and st.session_state['ai_report'] is not None:
         st.markdown("### 📊 AI 요약 보고서")
         st.markdown(st.session_state['ai_report'])
         st.download_button(
             label="📑 AI 보고서 다운로드",
             data=st.session_state['ai_report'],
-            file_name=f"ai_report_{st.session_state['paper_date'].strftime('%Y%m%d')}.txt",
+            file_name=f"ai_report_{paper_date.strftime('%Y%m%d') if paper_date else datetime.now().strftime('%Y%m%d')}.txt",
             mime="text/plain",
             key="btn_download_ai_report"
         )
@@ -604,6 +651,12 @@ def display_search_results():
     keyword = st.session_state['current_search_keyword']
     
     st.markdown("---")
+    
+    # articles가 None이면 함수 종료
+    if articles is None:
+        st.info("검색 결과가 없습니다. 키워드를 입력하고 검색을 시작해주세요.")
+        return
+        
     st.markdown(f"### 🔍 '{keyword}' 검색 결과 ({len(articles)}개)")
     
     if len(articles) == 0:
@@ -666,8 +719,8 @@ def display_search_results():
                 st.markdown(f"**출처:** {article.get('source', '알 수 없음')}")
                 st.markdown(f"**링크:** [기사 보기]({article['link']})")
 
-def download_listed_companies():
-    """상장법인목록 다운로드 및 처리"""
+def get_industry_info():
+    """업종 및 주요제품 정보 수집"""
     try:
         # KRX KIND 시스템 상장법인목록 URL
         url = "https://kind.krx.co.kr/corpgeneral/corpList.do"
@@ -711,58 +764,58 @@ def download_listed_companies():
         # 종목코드 포맷팅
         df['종목코드'] = df['종목코드'].astype(str).str.zfill(6)
         
-        # CSV 파일로 저장
-        df.to_csv("listed_companies.csv", index=False, encoding='utf-8-sig')
-        
         return df
         
     except Exception as e:
-        st.error(f"상장법인목록 다운로드 중 오류 발생: {str(e)}")
-        # 기존 CSV 파일이 있으면 그것을 사용
-        if os.path.exists("listed_companies.csv"):
-            try:
-                df = pd.read_csv("listed_companies.csv", encoding='utf-8-sig')
-                df['종목코드'] = df['종목코드'].astype(str).str.zfill(6)
-                return df
-            except:
-                pass
+        st.error(f"업종 정보 수집 중 오류 발생: {str(e)}")
         return pd.DataFrame()
 
 def collect_market_data(market: str, date: str) -> pd.DataFrame:
     """시장 데이터 수집"""
     try:
-        # OHLCV 데이터 수집
-        df = stock.get_market_ohlcv_by_ticker(date, market=market)
-        time.sleep(0.5)  # API 호출 간 딜레이
+        # 1. 가격 변동 데이터 수집 (이 데이터에 모든 필요한 정보가 포함되어 있음)
+        df = stock.get_market_price_change(date, date, market=market)
+        time.sleep(0.3)  # API 호출 간 딜레이
         
-        # 종목명 추가
-        df['종목명'] = df.index.map(lambda x: stock.get_market_ticker_name(x))
-        time.sleep(0.5)  # API 호출 간 딜레이
+        # 2. OHLCV 데이터 수집 (고가, 저가, 시가총액 정보)
+        df_ohlcv = stock.get_market_ohlcv(date, market=market)
+        time.sleep(0.3)  # API 호출 간 딜레이
         
-        # 시장구분 추가
-        df['시장구분'] = market
+        # 3. 기본 지표 데이터 수집
+        df_fundamental = stock.get_market_fundamental(date, market=market)
+        time.sleep(0.3)  # API 호출 간 딜레이
         
-        # 시가총액 조회
-        market_cap = stock.get_market_cap_by_ticker(date, market=market)
-        time.sleep(0.5)  # API 호출 간 딜레이
+        # 4. 업종 정보 수집
+        df_industry = get_industry_info()
         
-        # 시가총액 정보 추가
-        df['시가총액'] = market_cap['시가총액']
-        df['상장주식수'] = market_cap['상장주식수']
+        # 5. OHLCV 데이터 병합 (고가, 저가, 시가총액)
+        if not df_ohlcv.empty:
+            # 필요한 컬럼만 선택하여 병합
+            df = df.merge(df_ohlcv[['고가', '저가', '시가총액']], 
+                         left_index=True, 
+                         right_index=True, 
+                         how='left')
         
-        # 변동폭 계산
-        df['변동폭'] = df['고가'] - df['저가']
-        df['변동률'] = (df['변동폭'] / df['시가']) * 100
+        # 6. 기본 지표 데이터 병합
+        if not df_fundamental.empty:
+            df = df.merge(df_fundamental, 
+                         left_index=True, 
+                         right_index=True, 
+                         how='left')
         
-        # 상장법인목록 데이터 추가
-        listed_companies = download_listed_companies()
-        if not listed_companies.empty:
-            df = df.merge(listed_companies, left_index=True, right_on='종목코드', how='left')
+        # 7. 업종 정보 병합
+        if not df_industry.empty:
+            df = df.merge(df_industry, 
+                         left_index=True, 
+                         right_on='종목코드', 
+                         how='left')
             df = df.drop('종목코드', axis=1)
         else:
-            # 상장법인목록 데이터가 없는 경우 빈 컬럼 추가
             df['업종'] = ''
             df['주요제품'] = ''
+        
+        # 8. 시장구분 추가
+        df['시장구분'] = market
         
         return df
         
@@ -772,7 +825,9 @@ def collect_market_data(market: str, date: str) -> pd.DataFrame:
 
 def display_market_analysis(df: pd.DataFrame, date: datetime):
     """시장 데이터 분석 결과 표시"""
-    st.success(f"✅ {len(df)}개 종목의 데이터를 조회했습니다!")
+    # 현재 시간 표시
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    st.success(f"✅ {len(df)}개 종목의 데이터를 조회했습니다! (최종 업데이트: {current_time})")
     
     # 요약 정보
     st.markdown("### 📊 시장 요약")
@@ -786,52 +841,7 @@ def display_market_analysis(df: pd.DataFrame, date: datetime):
     with col3:
         st.metric("평균 시가총액", f"{df['시가총액'].mean()/100000000:.0f}억원")
     with col4:
-        st.metric("평균 변동률", f"{df['변동률'].mean():.2f}%")
-    
-    # Top 30 종목 분석
-    st.markdown("### 🏆 Top 30 종목 분석")
-    
-    # 등락률 Top 30
-    st.markdown("#### 📈 등락률 Top 30")
-    top_change = df.nlargest(30, '등락률')
-    
-    # 등락률 Top 30 테이블
-    display_top_change = top_change.copy()
-    display_top_change['시가총액'] = display_top_change['시가총액'].apply(lambda x: f"{x/100000000:.0f}억원")
-    display_top_change['거래대금'] = display_top_change['거래대금'].apply(lambda x: f"{x/100000000:.0f}억원")
-    display_top_change['거래량'] = display_top_change['거래량'].apply(lambda x: f"{x:,}")
-    display_top_change['변동폭'] = display_top_change['변동폭'].apply(lambda x: f"{x:,}")
-    display_top_change['변동률'] = display_top_change['변동률'].apply(lambda x: f"{x:.2f}%")
-    
-    st.dataframe(
-        display_top_change[['종목명', '시장구분', '업종', '주요제품', '시가', '고가', '저가', '종가', 
-                          '거래량', '거래대금', '등락률', '변동폭', '변동률', '시가총액']],
-        use_container_width=True,
-        hide_index=True
-    )
-    
-    st.markdown("---")
-    
-    # 거래대금 Top 30
-    st.markdown("#### 💰 거래대금 Top 30")
-    top_volume = df.nlargest(30, '거래대금')
-    
-    # 거래대금 Top 30 테이블
-    display_top_volume = top_volume.copy()
-    display_top_volume['시가총액'] = display_top_volume['시가총액'].apply(lambda x: f"{x/100000000:.0f}억원")
-    display_top_volume['거래대금'] = display_top_volume['거래대금'].apply(lambda x: f"{x/100000000:.0f}억원")
-    display_top_volume['거래량'] = display_top_volume['거래량'].apply(lambda x: f"{x:,}")
-    display_top_volume['변동폭'] = display_top_volume['변동폭'].apply(lambda x: f"{x:,}")
-    display_top_volume['변동률'] = display_top_volume['변동률'].apply(lambda x: f"{x:.2f}%")
-    
-    st.dataframe(
-        display_top_volume[['종목명', '시장구분', '업종', '주요제품', '시가', '고가', '저가', '종가', 
-                          '거래량', '거래대금', '등락률', '변동폭', '변동률', '시가총액']],
-        use_container_width=True,
-        hide_index=True
-    )
-    
-    st.markdown("---")
+        st.metric("평균 등락률", f"{df['등락률'].mean():.2f}%")
     
     # 등락률 분포 차트
     st.markdown("### 📈 등락률 분포")
@@ -859,7 +869,7 @@ def display_market_analysis(df: pd.DataFrame, date: datetime):
     # 정렬 옵션
     sort_column = st.selectbox(
         "정렬 기준",
-        options=['종가', '거래량', '등락률', '시가총액', '변동률'],
+        options=['종가', '거래량', '등락률', '시가총액', '변동폭', 'PER', 'PBR', 'EPS', 'BPS', 'DIV', 'DPS'],
         index=3
     )
     
@@ -871,12 +881,18 @@ def display_market_analysis(df: pd.DataFrame, date: datetime):
     display_df['거래대금'] = display_df['거래대금'].apply(lambda x: f"{x/100000000:.0f}억원")
     display_df['거래량'] = display_df['거래량'].apply(lambda x: f"{x:,}")
     display_df['변동폭'] = display_df['변동폭'].apply(lambda x: f"{x:,}")
-    display_df['변동률'] = display_df['변동률'].apply(lambda x: f"{x:.2f}%")
+    display_df['등락률'] = display_df['등락률'].apply(lambda x: f"{x:.2f}%")
+    
+    # 기본 지표 포맷팅
+    for col in ['PER', 'PBR', 'EPS', 'BPS', 'DIV', 'DPS']:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].apply(lambda x: f"{x:.2f}" if pd.notnull(x) else "-")
     
     # 표시할 열 선택
     columns_to_display = [
         '종목명', '시장구분', '업종', '주요제품', '시가', '고가', '저가', '종가', 
-        '거래량', '거래대금', '등락률', '변동폭', '변동률', '시가총액'
+        '거래량', '거래대금', '등락률', '변동폭', '시가총액',
+        'PER', 'PBR', 'EPS', 'BPS', 'DIV', 'DPS'
     ]
     
     # 데이터 테이블 표시
@@ -894,6 +910,17 @@ def display_market_analysis(df: pd.DataFrame, date: datetime):
         file_name=f"stock_data_{date.strftime('%Y%m%d')}.csv",
         mime="text/csv"
     )
+    
+    # 지표 설명
+    st.markdown("### 📊 주요 지표 설명")
+    st.markdown("""
+    - **PER (주가수익비율)**: 주가를 주당순이익(EPS)으로 나눈 값으로, 기업의 수익성과 주가의 관계를 나타냅니다. 낮을수록 저평가된 주식으로 볼 수 있습니다.
+    - **PBR (주가순자산비율)**: 주가를 주당순자산(BPS)으로 나눈 값으로, 기업의 순자산 대비 주가의 수준을 나타냅니다. 1 미만이면 순자산보다 저평가된 것으로 볼 수 있습니다.
+    - **EPS (주당순이익)**: 기업의 순이익을 발행주식수로 나눈 값으로, 주주가 받을 수 있는 이익을 나타냅니다.
+    - **BPS (주당순자산)**: 기업의 순자산을 발행주식수로 나눈 값으로, 주주가 받을 수 있는 순자산을 나타냅니다.
+    - **DIV (배당수익률)**: 주당배당금(DPS)을 주가로 나눈 값으로, 투자금액 대비 배당수익을 나타냅니다.
+    - **DPS (주당배당금)**: 기업이 주주에게 지급하는 배당금을 발행주식수로 나눈 값입니다.
+    """)
 
 def display_stock_data():
     """전체 종목 시세 조회"""
@@ -917,7 +944,7 @@ def display_stock_data():
     )
     
     # 필터링 옵션
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3 = st.columns([2, 5, 1])
     
     with col1:
         market_filter = st.multiselect(
@@ -927,12 +954,35 @@ def display_stock_data():
         )
     
     with col2:
+        st.markdown("주가 범위")
+        price_col1, price_col2 = st.columns(2)
+        with price_col1:
+            min_price = st.number_input(
+                "최소 주가",
+                min_value=0,
+                max_value=1500000,
+                value=0,
+                step=1000,
+                help="최소 주가를 입력하세요"
+            )
+        with price_col2:
+            max_price = st.number_input(
+                "최대 주가",
+                min_value=0,
+                max_value=1500000,
+                value=1500000,
+                step=1000,
+                help="최대 주가를 입력하세요"
+            )
+        
+        # 슬라이더는 입력된 값과 동기화
         price_range = st.slider(
-            "주가 범위",
+            "",
             min_value=0,
-            max_value=1000000,
-            value=(0, 1000000),
-            step=1000
+            max_value=1500000,
+            value=(min_price, max_price),
+            step=1000,
+            help="원하는 주가 범위를 선택하세요"
         )
     
     with col3:
@@ -964,6 +1014,11 @@ def display_stock_data():
                     (df['거래량'] >= volume_filter)
                 ]
                 
+                # 세션 상태에 저장
+                st.session_state['stock_data'] = df
+                st.session_state['stock_filtered_data'] = filtered_df
+                st.session_state['stock_date'] = selected_date
+                
                 if len(filtered_df) > 0:
                     display_market_analysis(filtered_df, selected_date)
                 else:
@@ -971,6 +1026,164 @@ def display_stock_data():
                 
             except Exception as e:
                 st.error(f"데이터 조회 중 오류가 발생했습니다: {str(e)}")
+    else:
+        # 저장된 데이터가 있으면 표시
+        if st.session_state['stock_filtered_data'] is not None:
+            display_market_analysis(st.session_state['stock_filtered_data'], st.session_state['stock_date'])
+
+def display_stock_market_tab():
+    """오늘의 증시 탭 표시"""
+    st.markdown("### 📈 오늘의 증시(종료일 기준)")
+    
+    # 날짜 선택
+    today = datetime.now()
+    max_date = today.strftime("%Y%m%d")
+    
+    # 주말인 경우 금요일을 기본값으로
+    if today.weekday() >= 5:  # 5: 토요일, 6: 일요일
+        days_to_subtract = today.weekday() - 4
+        today = today - timedelta(days=days_to_subtract)
+    
+    # 날짜 선택 위젯
+    col1, col2 = st.columns(2)
+    with col1:
+        start_date = st.date_input(
+            "시작일",
+            value=today - timedelta(days=90),  # 90일 전으로 기본값 설정
+            max_value=today,
+            help="조회 시작일을 선택하세요"
+        )
+    with col2:
+        end_date = st.date_input(
+            "종료일",
+            value=today,
+            max_value=today,
+            help="조회 종료일을 선택하세요"
+        )
+    
+    # 1. 주요 지수 시세
+    st.markdown("#### 📊 주요 지수")
+    index_codes = {
+        'KOSPI': 'KS11',
+        'KOSDAQ': 'KQ11',
+        'S&P 500': 'US500',
+        'NASDAQ': 'IXIC',
+        '다우존스': 'DJI',
+        '니케이225': 'N225',
+        '항셍지수': 'HSI'
+    }
+
+    cols = st.columns(len(index_codes))
+    for i, (name, code) in enumerate(index_codes.items()):
+        try:
+            df = fdr.DataReader(code, start_date, end_date)
+            delta = df['Close'].pct_change().iloc[-1] * 100
+            cols[i].metric(label=name, value=f"{df['Close'].iloc[-1]:,.2f}", delta=f"{delta:.2f}%")
+        except Exception as e:
+            cols[i].error(f"{name} 지수 오류: {e}")
+    
+    st.markdown("---")
+    
+    # 2. 거래실적 데이터 표시
+    display_trading_value(start_date, end_date)
+    
+    # 3. 환율 & 원자재 시세
+    st.markdown("#### 💱 환율 및 원자재 가격")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("##### 환율")
+        fx_codes = {'미국 달러 (USD/KRW)': 'USD/KRW', '일본 엔화 (JPY/KRW)': 'JPY/KRW'}
+        for label, code in fx_codes.items():
+            try:
+                fx = fdr.DataReader(code, start_date, end_date)
+                if not fx.empty:
+                    st.line_chart(fx['Close'].rename(label), height=150)
+                else:
+                    st.warning(f"{label} 데이터가 존재하지 않습니다.")
+            except Exception as e:
+                st.error(f"{label} 데이터 오류: {e}")
+
+    with col2:
+        st.markdown("##### 원자재")
+        cm_codes = {'서부텍사스산 원유 (WTI)': 'WTI', '금 (GOLD)': 'GOLD'}
+        for label, code in cm_codes.items():
+            try:
+                cm = fdr.DataReader(code, start_date, end_date)
+                if not cm.empty:
+                    st.line_chart(cm['Close'].rename(label), height=150)
+                else:
+                    st.warning(f"{label} 데이터가 존재하지 않습니다.")
+            except Exception as e:
+                st.error(f"{label} 데이터 오류: {e}")
+    
+    st.markdown("---")
+    
+    # 4. 개별 종목 조회
+    st.markdown("#### 🔍 개별 종목/ETF 조회")
+    code_input = st.text_input("종목코드, 티커 또는 종목명 입력 (예: 005930, AAPL, 삼성전자 등)", value="005930")
+    if code_input:
+        try:
+            # 입력값이 티커/코드가 아닌 경우 종목명으로 검색
+            if not any(c.isdigit() for c in code_input) and not code_input.isupper():
+                ticker = get_ticker_from_name(code_input)
+                if ticker:
+                    st.info(f"'{code_input}'의 티커/코드: {ticker}")
+                    code_input = ticker
+                else:
+                    st.warning(f"'{code_input}'에 해당하는 종목을 찾을 수 없습니다.")
+                    return
+
+            df_stock = fdr.DataReader(code_input, start_date, end_date)
+            if df_stock.empty:
+                st.warning(f"{code_input}에 대한 데이터가 없습니다.")
+            else:
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=df_stock.index, y=df_stock['Close'], mode='lines', name='종가'))
+                fig.update_layout(title=f"{code_input} 주가 추이", xaxis_title="날짜", yaxis_title="가격")
+                st.plotly_chart(fig, use_container_width=True)
+
+                with st.expander("📊 기술적 지표 보기"):
+                    df_stock['SMA20'] = df_stock['Close'].rolling(window=20).mean()
+                    df_stock['SMA60'] = df_stock['Close'].rolling(window=60).mean()
+                    df_stock['EMA20'] = df_stock['Close'].ewm(span=20).mean()
+                    df_stock['EMA60'] = df_stock['Close'].ewm(span=60).mean()
+
+                    delta = df_stock['Close'].diff()
+                    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                    rs = gain / loss
+                    df_stock['RSI'] = 100 - (100 / (1 + rs))
+
+                    ema12 = df_stock['Close'].ewm(span=12).mean()
+                    ema26 = df_stock['Close'].ewm(span=26).mean()
+                    df_stock['MACD'] = ema12 - ema26
+                    df_stock['Signal'] = df_stock['MACD'].ewm(span=9).mean()
+
+                    fig2 = go.Figure()
+                    fig2.add_trace(go.Scatter(x=df_stock.index, y=df_stock['Close'], name='종가'))
+                    fig2.add_trace(go.Scatter(x=df_stock.index, y=df_stock['SMA20'], name='SMA20'))
+                    fig2.add_trace(go.Scatter(x=df_stock.index, y=df_stock['SMA60'], name='SMA60'))
+                    fig2.add_trace(go.Scatter(x=df_stock.index, y=df_stock['EMA20'], name='EMA20'))
+                    fig2.add_trace(go.Scatter(x=df_stock.index, y=df_stock['EMA60'], name='EMA60'))
+                    fig2.update_layout(title=f"{code_input} 이동평균선 비교", xaxis_title="날짜", yaxis_title="가격")
+                    st.plotly_chart(fig2, use_container_width=True)
+
+                    fig3 = go.Figure()
+                    fig3.add_trace(go.Scatter(x=df_stock.index, y=df_stock['MACD'], name='MACD'))
+                    fig3.add_trace(go.Scatter(x=df_stock.index, y=df_stock['Signal'], name='Signal'))
+                    fig3.update_layout(title=f"{code_input} MACD", xaxis_title="날짜", yaxis_title="값")
+                    st.plotly_chart(fig3, use_container_width=True)
+
+                    fig4 = go.Figure()
+                    fig4.add_trace(go.Scatter(x=df_stock.index, y=df_stock['RSI'], name='RSI'))
+                    fig4.add_hline(y=70, line=dict(dash='dash', color='red'))
+                    fig4.add_hline(y=30, line=dict(dash='dash', color='green'))
+                    fig4.update_layout(title=f"{code_input} RSI", xaxis_title="날짜", yaxis_title="RSI 값")
+                    st.plotly_chart(fig4, use_container_width=True)
+
+        except Exception as e:
+            st.error(f"{code_input} 데이터 조회 중 오류가 발생했습니다: {e}")
 
 # secrets 확인 (보안)
 api_available, missing_secrets = check_secrets()
@@ -1012,17 +1225,11 @@ with st.sidebar:
         
     **오늘의 증시:**
     1. 주요 지수 동향 
-    2. 환율 및 원자재 동향 
-    3. 개별 종목 차트 검색 
-    4. 종목 기술적 지표 검색 
+    2. 시장별 거래 실적 
+    3. 환율 및 원자재 동향 
+    4. 개별 종목 차트 검색 
+    5. 종목 기술적 지표 검색 
     """)
-    
-    st.markdown("---")
-    st.markdown("### 📊 통계")
-    if 'newspaper_articles' in st.session_state:
-        st.metric("수집된 신문 기사", len(st.session_state['newspaper_articles']))
-    if 'search_articles' in st.session_state:
-        st.metric("검색된 기사", len(st.session_state['search_articles']))
 
 # 탭 생성
 tab1, tab2, tab3, tab4 = st.tabs(["📰 신문 게재 기사 수집", "🔍 네이버 뉴스 검색", "📈 오늘의 증시", "📊 전체 종목 시세"])
