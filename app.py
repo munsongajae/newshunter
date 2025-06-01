@@ -22,7 +22,7 @@ import re
 
 # 페이지 설정
 st.set_page_config(
-    page_title="경제적 자유 프로젝트",
+    page_title="신문 기사 수집기",
     page_icon="📰",
     layout="wide",
     initial_sidebar_state="expanded"

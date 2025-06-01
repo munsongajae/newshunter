@@ -268,6 +268,11 @@ class NaverNewsSearcher:
                         pub_date = item.get("pubDate", "")
                         try:
                             pub_date = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S +0900")
+                            
+                            # 선택된 날짜와 일치하는 기사만 필터링
+                            if pub_date.date() != selected_date:
+                                continue
+                            
                         except ValueError:
                             continue
                         
