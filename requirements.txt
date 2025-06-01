@@ -7,4 +7,7 @@ lxml
 google-generativeai
 pykrx
 plotly
+numpy
+python-dateutil
+streamlit-option-menu
 git+https://github.com/financedata-org/FinanceDataReader.git
