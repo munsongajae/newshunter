@@ -60,6 +60,28 @@ if 'stock_news_keyword_counts' not in st.session_state:
     st.session_state['stock_news_keyword_counts'] = {}
 if 'stock_news_matched_stocks' not in st.session_state:
     st.session_state['stock_news_matched_stocks'] = set()
+if 'market_data' not in st.session_state:
+    st.session_state['market_data'] = None
+if 'market_date' not in st.session_state:
+    st.session_state['market_date'] = None
+if 'market_start_date' not in st.session_state:
+    # 한국 시간 기준으로 오늘 날짜 설정
+    KST = timezone(timedelta(hours=9))
+    today = datetime.now(KST).date()
+    # 주말인 경우 금요일로 설정
+    if today.weekday() >= 5:  # 5: 토요일, 6: 일요일
+        days_to_subtract = today.weekday() - 4
+        today = today - timedelta(days=days_to_subtract)
+    st.session_state['market_start_date'] = today - timedelta(days=90)  # 90일 전
+if 'market_end_date' not in st.session_state:
+    # 한국 시간 기준으로 오늘 날짜 설정
+    KST = timezone(timedelta(hours=9))
+    today = datetime.now(KST).date()
+    # 주말인 경우 금요일로 설정
+    if today.weekday() >= 5:  # 5: 토요일, 6: 일요일
+        days_to_subtract = today.weekday() - 4
+        today = today - timedelta(days=days_to_subtract)
+    st.session_state['market_end_date'] = today
 
 # CSS 스타일링
 st.markdown("""
