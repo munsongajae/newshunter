@@ -2,6 +2,10 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from download_utils import DownloadManager
+
+# DownloadManager 인스턴스 생성
+download_manager = DownloadManager()
 
 def display_stock_news_results(results, selected_keywords, keyword_article_counts, matched_stocks, selected_date):
     """특징주 포착 결과 표시"""
@@ -42,10 +46,10 @@ def display_stock_news_results(results, selected_keywords, keyword_article_count
         )
         
         # CSV 다운로드
-        csv = df_results.to_csv(index=False).encode('utf-8-sig')
+        csv_data = download_manager.create_stock_data_download(df_results, selected_date)
         st.download_button(
             label="📥 CSV 다운로드",
-            data=csv,
+            data=csv_data,
             file_name=f"stock_news_{selected_date.strftime('%Y%m%d')}.csv",
             mime="text/csv"
         )

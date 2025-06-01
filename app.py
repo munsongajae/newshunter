@@ -21,7 +21,8 @@ from streamlit_option_menu import option_menu
 import re
 from stock_news import display_stock_news_results
 from download_utils import DownloadManager
-from ai_utils import AIManager
+from util.ai.ai_utils import AIManager
+from util.data_collector import DataCollector
 
 # 매니저 인스턴스 생성
 ai_manager = AIManager()
@@ -422,12 +423,9 @@ def display_newspaper_results():
     with col4:
         if st.button("🤖 AI 보고서 생성", key="btn_generate_ai_report"):
             with st.spinner("AI가 기사를 분석하고 보고서를 생성하는 중..."):
-                # AI 보고서 생성
-                report_text = ai_manager.generate_ai_report(display_articles, paper_date)
-                # 다운로드용 텍스트 생성
-                download_text = download_manager.create_ai_report_download(report_text, paper_date)
-                
-                st.session_state['ai_report'] = download_text
+                # AIManager 사용
+                report_text = AIManager.generate_ai_report(display_articles, paper_date)
+                st.session_state['ai_report'] = report_text
                 st.success("✅ AI 보고서가 생성되었습니다.")
                 st.rerun()
     
@@ -594,110 +592,6 @@ def display_search_results():
                 st.markdown(f"**출처:** {article.get('source', '알 수 없음')}")
                 st.markdown(f"**링크:** [기사 보기]({article['link']})")
 
-def get_industry_info():
-    """업종 및 주요제품 정보 수집"""
-    try:
-        # KRX KIND 시스템 상장법인목록 URL
-        url = "https://kind.krx.co.kr/corpgeneral/corpList.do"
-        params = {
-            "method": "download",
-            "searchType": "13"
-        }
-        
-        # 파일 다운로드
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        
-        # HTML 파싱
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # 테이블 찾기
-        table = soup.find('table')
-        if not table:
-            raise ValueError("상장법인목록 테이블을 찾을 수 없습니다.")
-        
-        # 데이터 추출
-        data = []
-        rows = table.find_all('tr')[1:]  # 헤더 제외
-        
-        for row in rows:
-            cols = row.find_all('td')
-            if len(cols) >= 3:  # 최소 3개 컬럼 확인
-                stock_code = cols[1].text.strip()  # 종목코드
-                industry = cols[2].text.strip()    # 업종
-                main_product = cols[3].text.strip() if len(cols) > 3 else ''  # 주요제품
-                
-                data.append({
-                    '종목코드': stock_code,
-                    '업종': industry,
-                    '주요제품': main_product
-                })
-        
-        # DataFrame 생성
-        df = pd.DataFrame(data)
-        
-        # 종목코드 포맷팅
-        df['종목코드'] = df['종목코드'].astype(str).str.zfill(6)
-        
-        return df
-        
-    except Exception as e:
-        st.error(f"업종 정보 수집 중 오류 발생: {str(e)}")
-        return pd.DataFrame()
-
-def collect_market_data(market: str, date: str) -> pd.DataFrame:
-    """시장 데이터 수집"""
-    try:
-        # 1. 가격 변동 데이터 수집 (이 데이터에 모든 필요한 정보가 포함되어 있음)
-        df = stock.get_market_price_change(date, date, market=market)
-        time.sleep(0.3)  # API 호출 간 딜레이
-        
-        # 2. OHLCV 데이터 수집 (고가, 저가, 시가총액 정보)
-        df_ohlcv = stock.get_market_ohlcv(date, market=market)
-        time.sleep(0.3)  # API 호출 간 딜레이
-        
-        # 3. 기본 지표 데이터 수집
-        df_fundamental = stock.get_market_fundamental(date, market=market)
-        time.sleep(0.3)  # API 호출 간 딜레이
-        
-        # 4. 업종 정보 수집
-        df_industry = get_industry_info()
-        
-        # 5. OHLCV 데이터 병합 (고가, 저가, 시가총액)
-        if not df_ohlcv.empty:
-            # 필요한 컬럼만 선택하여 병합
-            df = df.merge(df_ohlcv[['고가', '저가', '시가총액']], 
-                         left_index=True, 
-                         right_index=True, 
-                         how='left')
-        
-        # 6. 기본 지표 데이터 병합
-        if not df_fundamental.empty:
-            df = df.merge(df_fundamental, 
-                         left_index=True, 
-                         right_index=True, 
-                         how='left')
-        
-        # 7. 업종 정보 병합
-        if not df_industry.empty:
-            df = df.merge(df_industry, 
-                         left_index=True, 
-                         right_on='종목코드', 
-                         how='left')
-            df = df.drop('종목코드', axis=1)
-        else:
-            df['업종'] = ''
-            df['주요제품'] = ''
-        
-        # 8. 시장구분 추가
-        df['시장구분'] = market
-        
-        return df
-        
-    except Exception as e:
-        st.error(f"{market} 데이터 수집 중 오류: {str(e)}")
-        return pd.DataFrame()
-
 def display_market_analysis(df: pd.DataFrame, date: datetime):
     """시장 데이터 분석 결과 표시"""
     # 현재 시간 표시
@@ -778,10 +672,10 @@ def display_market_analysis(df: pd.DataFrame, date: datetime):
     )
     
     # CSV 다운로드
-    csv = df[columns_to_display].to_csv(index=False).encode('utf-8-sig')
+    csv_data = download_manager.create_stock_data_download(df[columns_to_display], date)
     st.download_button(
         label="📥 CSV 다운로드",
-        data=csv,
+        data=csv_data,
         file_name=f"stock_data_{date.strftime('%Y%m%d')}.csv",
         mime="text/csv"
     )
@@ -873,21 +767,22 @@ def display_stock_data():
         with st.spinner('데이터를 수집하는 중입니다...'):
             try:
                 # KOSPI 데이터 수집
-                kospi_df = collect_market_data("KOSPI", selected_date.strftime("%Y%m%d"))
+                kospi_df = DataCollector.collect_market_data("KOSPI", selected_date.strftime("%Y%m%d"))
                 time.sleep(1)  # API 호출 간 딜레이
                 
                 # KOSDAQ 데이터 수집
-                kosdaq_df = collect_market_data("KOSDAQ", selected_date.strftime("%Y%m%d"))
+                kosdaq_df = DataCollector.collect_market_data("KOSDAQ", selected_date.strftime("%Y%m%d"))
                 
                 # 데이터 합치기
                 df = pd.concat([kospi_df, kosdaq_df])
                 
                 # 필터링
-                filtered_df = df[
-                    (df['시장구분'].isin(market_filter)) &
-                    (df['종가'].between(price_range[0], price_range[1])) &
-                    (df['거래량'] >= volume_filter)
-                ]
+                filtered_df = DataCollector.filter_market_data(
+                    df,
+                    market_filter,
+                    (price_range[0], price_range[1]),
+                    volume_filter
+                )
                 
                 # 세션 상태에 저장
                 st.session_state['stock_data'] = df
@@ -983,7 +878,7 @@ def display_stock_news_tab():
             
             for market in ['KOSPI', 'KOSDAQ']:
                 try:
-                    df = collect_market_data(market, selected_date.strftime("%Y%m%d"))
+                    df = DataCollector.collect_market_data(market, selected_date.strftime("%Y%m%d"))
                     market_data[market] = df
                     # 시장 데이터에서 종목명 추출
                     all_stock_names.update(df['종목명'].tolist())
