@@ -219,55 +219,73 @@ class NaverNewsSearcher:
     def search_stock_news(self, keywords, selected_date, max_articles):
         """특징주 관련 뉴스 검색"""
         try:
-            # max_articles가 100을 초과하면 100으로 제한
-            max_articles = min(max_articles, 100)
-            
             all_results = []
+            display = min(self.max_articles_per_request, 100)  # API 한 번 호출당 최대 100개
+            
+            # 각 키워드별로 동일한 수의 기사 검색
+            articles_per_keyword = max_articles // len(keywords)
             
             # 각 키워드별로 검색
             for keyword in keywords:
-                # API 호출 파라미터 설정
-                params = {
-                    "query": keyword,
-                    "display": max_articles,  # 제한된 기사 수 사용
-                    "start": 1,
-                    "sort": "date"   # 최신순 정렬
-                }
+                keyword_results = []
+                total_requests = (articles_per_keyword + display - 1) // display
                 
-                # API 호출
-                headers = {
-                    'X-Naver-Client-Id': self.client_id,
-                    'X-Naver-Client-Secret': self.client_secret
-                }
-                
-                response = requests.get(self.base_url, headers=headers, params=params)
-                response.raise_for_status()
-                
-                # 응답 파싱
-                data = response.json()
-                items = data.get("items", [])
-                
-                # 기사 정보 추출
-                for item in items:
-                    # HTML 태그 제거
-                    title = re.sub(r'<[^>]+>', '', item.get("title", ""))
-                    description = re.sub(r'<[^>]+>', '', item.get("description", ""))
+                for i in range(total_requests):
+                    start = i * display + 1
+                    current_display = min(display, articles_per_keyword - len(keyword_results))
                     
-                    # 발행일 파싱
-                    pub_date = item.get("pubDate", "")
-                    try:
-                        pub_date = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S +0900")
-                    except ValueError:
-                        continue
+                    if current_display <= 0:
+                        break
                     
-                    all_results.append({
-                        "title": title,
-                        "description": description,
-                        "link": item.get("link", ""),
-                        "pubDate": pub_date
-                    })
+                    # API 호출 파라미터 설정
+                    params = {
+                        "query": keyword,
+                        "display": current_display,
+                        "start": start,
+                        "sort": "date"   # 최신순 정렬
+                    }
+                    
+                    # API 호출
+                    headers = {
+                        'X-Naver-Client-Id': self.client_id,
+                        'X-Naver-Client-Secret': self.client_secret
+                    }
+                    
+                    response = requests.get(self.base_url, headers=headers, params=params)
+                    response.raise_for_status()
+                    
+                    # 응답 파싱
+                    data = response.json()
+                    items = data.get("items", [])
+                    
+                    # 기사 정보 추출
+                    for item in items:
+                        # HTML 태그 제거
+                        title = re.sub(r'<[^>]+>', '', item.get("title", ""))
+                        description = re.sub(r'<[^>]+>', '', item.get("description", ""))
+                        
+                        # 발행일 파싱
+                        pub_date = item.get("pubDate", "")
+                        try:
+                            pub_date = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S +0900")
+                        except ValueError:
+                            continue
+                        
+                        keyword_results.append({
+                            "title": title,
+                            "description": description,
+                            "link": item.get("link", ""),
+                            "pubDate": pub_date,
+                            "keyword": keyword  # 키워드 정보 추가
+                        })
+                    
+                    if len(items) < current_display:
+                        break
+                    
+                    time.sleep(self.request_delay)  # API 호출 간격 조절
                 
-                time.sleep(0.1)  # API 호출 간격 조절
+                # 각 키워드별 결과를 전체 결과에 추가
+                all_results.extend(keyword_results[:articles_per_keyword])
             
             # 중복 제거 (제목 기준)
             seen_titles = set()
@@ -280,7 +298,7 @@ class NaverNewsSearcher:
             # 발행일 기준으로 정렬
             unique_results.sort(key=lambda x: x['pubDate'], reverse=True)
             
-            return unique_results  # 모든 중복 제거된 결과 반환
+            return unique_results[:max_articles]  # 요청한 최대 개수만큼 반환
             
         except Exception as e:
             st.error(f"뉴스 검색 중 오류 발생: {str(e)}")
@@ -291,7 +309,7 @@ def display_stock_news_tab():
     st.markdown("### 📈 특징주 포착")
     
     # 검색 키워드 선택
-    default_keywords = ["특징주", "급등주", "상한가", "급등세", "급락세", 
+    default_keywords = ["특징주", "급등주", "상한가", "하한가", "급등세", "급락세", 
                        "강세", "약세", "거래량 증가", "신고가", "신저가"]
     
     # 사용자 정의 키워드 입력
