@@ -20,6 +20,12 @@ import FinanceDataReader as fdr
 from streamlit_option_menu import option_menu
 import re
 from stock_news import display_stock_news_results
+from download_utils import DownloadManager
+from ai_utils import AIManager
+
+# 매니저 인스턴스 생성
+ai_manager = AIManager()
+download_manager = DownloadManager()
 
 # 페이지 설정
 st.set_page_config(
@@ -188,192 +194,6 @@ def remove_duplicates(articles):
     
     return unique_articles
 
-def create_excel_download(articles):
-    """엑셀 파일 생성"""
-    if articles is None:
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            pd.DataFrame().to_excel(writer, index=False)
-        return output.getvalue()
-        
-    df = pd.DataFrame(articles)
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='신문기사')
-    return output.getvalue()
-
-def create_text_download(articles, date):
-    """텍스트 파일 생성"""
-    if articles is None:
-        return "수집된 기사가 없습니다."
-        
-    text_content = f"📰 {date.strftime('%Y년 %m월 %d일')}의 신문 게재 기사 모음\n\n"
-    
-    newspaper_groups = {}
-    for article in articles:
-        newspaper = article['newspaper']
-        if newspaper not in newspaper_groups:
-            newspaper_groups[newspaper] = []
-        newspaper_groups[newspaper].append(article)
-    
-    for newspaper, articles_list in newspaper_groups.items():
-        text_content += f"📌 [{newspaper}]\n"
-        for article in articles_list:
-            page_info = f"[{article['page']}] " if article['page'] else ""
-            text_content += f"🔹 {page_info}{article['title']}\n   {article['url']}\n"
-        text_content += "\n"
-    
-    return text_content
-
-def create_search_excel_download(articles):
-    """검색 결과 엑셀 파일 생성"""
-    df = pd.DataFrame(articles)
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='검색결과')
-    return output.getvalue()
-
-def create_search_csv_download(articles):
-    """검색 결과 CSV 파일 생성"""
-    df = pd.DataFrame(articles)
-    return df.to_csv(index=False).encode('utf-8-sig')
-
-def create_search_text_download(articles, keyword):
-    """검색 결과 텍스트 파일 생성"""
-    text_content = f"🔍 '{keyword}' 검색 결과\n"
-    text_content += f"검색일시: {datetime.now().strftime('%Y년 %m월 %d일 %H시 %M분')}\n"
-    text_content += f"총 {len(articles)}개 기사\n\n"
-    
-    for i, article in enumerate(articles, 1):
-        text_content += f"{i}. {article['title']}\n"
-        text_content += f"   요약: {article['description']}\n"
-        text_content += f"   발행일: {article['pubDate']}\n"
-        text_content += f"   출처: {article.get('source', '알 수 없음')}\n"
-        text_content += f"   링크: {article['link']}\n\n"
-    
-    return text_content
-
-def generate_ai_report(articles: List[Dict], date: datetime) -> str:
-    """AI를 사용하여 기사 요약 보고서 생성"""
-    try:
-        # Google API 키 확인
-        if 'google_api' not in st.secrets or 'api_key' not in st.secrets['google_api']:
-            raise ValueError("Google API 키가 설정되지 않았습니다.")
-        
-        # Gemini API 설정
-        genai.configure(api_key=st.secrets['google_api']['api_key'])
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        # 기사 데이터 준비
-        articles_text = []
-        for article in articles:
-            articles_text.append(f"제목: {article['title']}\n신문사: {article['newspaper']}\n링크: {article['url']}\n")
-        
-        # 프롬프트 생성
-        prompt = f"""
-        ### 🎯 작업 목표
-        조간신문에 게재된 기사들을 종합 분석하여 독자들이 쉽게 이해할 수 있는 블로그 글을 작성합니다.
-
-        ### 📋 입력 데이터
-        - 조간 신문에 게재된 기사 목록
-        - 각 기사의 제목, 신문사, 링크 정보 포함
-
-        ### 🏗️ 출력 구조
-
-        #### 1. 전체 글 제목 작성
-        - 형식: "📰 [날짜] 조간신문 종합 - [주요 이슈 2-3개 키워드]"
-        - 예시: "📰 2025년 5월 28일 조간신문 종합 - 대선 막판 네거티브 공세와 경제 회복 신호"
-
-        #### 2. 전체 요약문 작성 (150-200자)
-        - 당일 가장 중요한 이슈 3-4개를 포함
-        - 정치, 경제, 사회, 국제 분야의 균형 있는 요약
-        - 독자의 관심을 끌 수 있는 핵심 내용 중심
-
-        #### 3. 섹션별 기사 분류 및 작성
-
-        **🔥 오늘의 Top 이슈 (5개 헤드라인)**
-        - 선정 기준: 
-          * 여러 언론사에서 공통으로 다룬 기사
-          * 사회적 파급력이 큰 사건
-          * 국민 생활에 직접적 영향을 미치는 이슈
-        - 각 기사의 제목만 작성
-
-        **🏛️ 정치/사회 (5개 기사)**
-        - 대선, 정치인 동향, 정책 발표, 사회 이슈 포함
-        - 내란 수사, 선거 관련, 사회 제도 변화 등
-
-        **💰 경제/산업 (5개 기사)**
-        - 기업 실적, 경제 지표, 산업 동향, 금융 정책
-        - 수출입, 주식시장, 부동산, 소비 트렌드 등
-
-        **🤖 기술/AI (5개 기사)**
-        - IT, 인공지능, 사이버보안, 통신, 혁신 기술
-        - 기업의 기술 개발, 디지털 전환 관련
-        
-        **🌍 국제/글로벌 (5개 기사)**
-        - 해외 정치, 국제 경제, 외교 관계
-        - 미국, 중국, 일본 등 주요국 동향
-
-        **🎤 연예/문화 (5개 기사)**
-        - 연예계 소식, 문화 행사, 한류, 예술 관련
-        - K-컬처, 엔터테인먼트 산업 동향
-
-        **🏌️ 스포츠 (5개 기사)**
-        - 프로스포츠, 국제대회, 선수 동향
-        - 야구, 축구, 골프 등 주요 스포츠 이슈
-        
-        ### 📝 각 기사 작성 형식
-        ### [순번]. [기사 제목]
-        **요약**: [핵심 내용을 50자 이내로 요약]
-        **링크**: [원문 링크]
-        ### 가독성 있게 줄바꿈을 이용할 것.     
-        ### 여러 기사링크르 통합할 경우 첫번째 기사 링크를 넣어줄 것.  
-
-        ### 🏷️ 해시태그 작성 (30개)
-        - 주요 인물명, 기관명, 이슈 키워드 포함
-        - 트렌딩 가능한 키워드 우선 선택
-        - 정치, 경제, 사회, 문화 분야 균형 있게 배치
-        - 한글 해시태그로 작성 (#대선2025, #경제회복 등)
-
-        ### 🎨 작성 스타일 가이드
-        - **객관적 톤**: 특정 정치적 성향 배제
-        - **독자 친화적**: 전문 용어 최소화, 쉬운 설명
-        - **간결성**: 핵심만 추려서 전달
-        - **균형성**: 다양한 분야의 이슈를 고르게 다룸
-        - **시의성**: 당일 가장 중요한 이슈 우선 배치
-
-        ### 🔍 기사 선별 기준
-        1. **중요도**: 사회적 파급력과 관심도
-        2. **신뢰성**: 주요 언론사 보도 여부
-        3. **다양성**: 분야별 균형 있는 선택
-        4. **독창성**: 새로운 정보나 관점 제공
-        5. **연관성**: 독자의 일상생활과의 관련성
-
-        ### ⚠️ 주의사항
-        - 사실 확인이 어려운 추측성 내용 배제
-        - 균형 잡힌 시각으로 이슈 전달
-        - 링크는 반드시 정확한 URL 사용
-
-        기사 목록:
-        {json.dumps(articles_text, ensure_ascii=False, indent=2)}
-        """
-        
-        # AI 요약 생성
-        response = model.generate_content(prompt)
-        return response.text
-        
-    except Exception as e:
-        return f"보고서 생성 중 오류가 발생했습니다: {str(e)}"
-
-def create_ai_report_download(articles, date):
-    """AI 보고서 텍스트 파일 생성"""
-    if articles is None:
-        return "수집된 기사가 없습니다."
-        
-    report_content = f"📊 {date.strftime('%Y년 %m월 %d일')} 신문 기사 AI 요약 보고서\n\n"
-    report_content += generate_ai_report(articles, date)
-    return report_content
-
 def newspaper_collection_tab():
     st.markdown("### 신문 게재 기사 수집")
     st.markdown("종이 신문에 실제로 실린 기사만 수집하여 제공합니다.")
@@ -523,7 +343,7 @@ def display_newspaper_results():
     if paper_date is not None:
         st.markdown(f"### 📰 {paper_date.strftime('%Y년 %m월 %d일')}의 신문 게재 기사 모음")
     else:
-        st.markdown("### 📰 신문 게재 기사 모음")
+        st.markdown("### 신문 게재 기사 모음")
     
     st.markdown(f"**총 {len(articles)}개 기사**")
     
@@ -571,36 +391,43 @@ def display_newspaper_results():
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        excel_data = create_excel_download(display_articles)
+        # 다운로드 매니저 인스턴스 생성
+        download_manager = DownloadManager()
+        
+        # 엑셀 다운로드 버튼
+        excel_data = download_manager.create_excel_download(display_articles)
         st.download_button(
             label="📊 엑셀 다운로드",
             data=excel_data,
-            file_name=f"newspaper_articles_{paper_date.strftime('%Y%m%d') if paper_date else datetime.now().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="btn_download_newspaper_excel"
+            file_name=f"newspaper_articles_{paper_date.strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
     
     with col2:
-        text_data = create_text_download(display_articles, paper_date if paper_date else datetime.now())
+        # 텍스트 다운로드 버튼
+        text_data = download_manager.create_text_download(display_articles, paper_date)
         st.download_button(
             label="📄 텍스트 다운로드",
             data=text_data,
-            file_name=f"newspaper_articles_{paper_date.strftime('%Y%m%d') if paper_date else datetime.now().strftime('%Y%m%d')}.txt",
-            mime="text/plain",
-            key="btn_download_newspaper_text"
+            file_name=f"newspaper_articles_{paper_date.strftime('%Y%m%d')}.txt",
+            mime="text/plain"
         )
     
     with col3:
         if st.button("📋 클립보드 복사", key="btn_copy_newspaper_text"):
-            copy_text = create_text_download(display_articles, paper_date if paper_date else datetime.now())
+            copy_text = download_manager.create_text_download(display_articles, paper_date)
             st.code(copy_text, language="text")
             st.success("✅ 텍스트가 준비되었습니다. 위 내용을 복사하세요.")
     
     with col4:
         if st.button("🤖 AI 보고서 생성", key="btn_generate_ai_report"):
             with st.spinner("AI가 기사를 분석하고 보고서를 생성하는 중..."):
-                report_text = create_ai_report_download(display_articles, paper_date if paper_date else datetime.now())
-                st.session_state['ai_report'] = report_text
+                # AI 보고서 생성
+                report_text = ai_manager.generate_ai_report(display_articles, paper_date)
+                # 다운로드용 텍스트 생성
+                download_text = download_manager.create_ai_report_download(report_text, paper_date)
+                
+                st.session_state['ai_report'] = download_text
                 st.success("✅ AI 보고서가 생성되었습니다.")
                 st.rerun()
     
@@ -613,7 +440,7 @@ def display_newspaper_results():
         st.download_button(
             label="📑 AI 보고서 다운로드",
             data=st.session_state['ai_report'],
-            file_name=f"ai_report_{paper_date.strftime('%Y%m%d') if paper_date else datetime.now().strftime('%Y%m%d')}.txt",
+            file_name=f"ai_report_{paper_date.strftime('%Y%m%d')}.txt",
             mime="text/plain",
             key="btn_download_ai_report"
         )
@@ -716,7 +543,7 @@ def display_search_results():
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        excel_data = create_search_excel_download(articles)
+        excel_data = download_manager.create_search_excel_download(articles)
         st.download_button(
             label="📊 엑셀 다운로드",
             data=excel_data,
@@ -726,7 +553,7 @@ def display_search_results():
         )
     
     with col2:
-        csv_data = create_search_csv_download(articles)
+        csv_data = download_manager.create_search_csv_download(articles)
         st.download_button(
             label="📊 CSV 다운로드",
             data=csv_data,
@@ -736,7 +563,7 @@ def display_search_results():
         )
     
     with col3:
-        text_data = create_search_text_download(articles, keyword)
+        text_data = download_manager.create_search_text_download(articles, keyword)
         st.download_button(
             label="📄 텍스트 다운로드",
             data=text_data,
