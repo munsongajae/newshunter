@@ -19,6 +19,7 @@ import os
 import FinanceDataReader as fdr
 from streamlit_option_menu import option_menu
 import re
+from stock_news import display_stock_news_results
 
 # 페이지 설정
 st.set_page_config(
@@ -47,6 +48,18 @@ if 'stock_date' not in st.session_state:
     st.session_state['stock_date'] = None
 if 'stock_filtered_data' not in st.session_state:
     st.session_state['stock_filtered_data'] = None
+if 'stock_news_data' not in st.session_state:
+    st.session_state['stock_news_data'] = None
+if 'stock_news_filtered_data' not in st.session_state:
+    st.session_state['stock_news_filtered_data'] = None
+if 'stock_news_date' not in st.session_state:
+    st.session_state['stock_news_date'] = None
+if 'stock_news_keywords' not in st.session_state:
+    st.session_state['stock_news_keywords'] = None
+if 'stock_news_keyword_counts' not in st.session_state:
+    st.session_state['stock_news_keyword_counts'] = {}
+if 'stock_news_matched_stocks' not in st.session_state:
+    st.session_state['stock_news_matched_stocks'] = set()
 
 # CSS 스타일링
 st.markdown("""
@@ -1044,167 +1057,12 @@ def display_stock_data():
         if st.session_state['stock_filtered_data'] is not None:
             display_market_analysis(st.session_state['stock_filtered_data'], st.session_state['stock_date'])
 
-def display_stock_market_tab():
-    """오늘의 증시 탭 표시"""
-    st.markdown("### 📈 오늘의 증시(종료일 기준)")
-    
-    # 날짜 선택
-    today = datetime.now()
-    max_date = today.strftime("%Y%m%d")
-    
-    # 주말인 경우 금요일을 기본값으로
-    if today.weekday() >= 5:  # 5: 토요일, 6: 일요일
-        days_to_subtract = today.weekday() - 4
-        today = today - timedelta(days=days_to_subtract)
-    
-    # 날짜 선택 위젯
-    col1, col2 = st.columns(2)
-    with col1:
-        start_date = st.date_input(
-            "시작일",
-            value=today - timedelta(days=90),  # 90일 전으로 기본값 설정
-            max_value=today,
-            help="조회 시작일을 선택하세요"
-        )
-    with col2:
-        end_date = st.date_input(
-            "종료일",
-            value=today,
-            max_value=today,
-            help="조회 종료일을 선택하세요"
-        )
-    
-    # 1. 주요 지수 시세
-    st.markdown("#### 📊 주요 지수")
-    index_codes = {
-        'KOSPI': 'KS11',
-        'KOSDAQ': 'KQ11',
-        'S&P 500': 'US500',
-        'NASDAQ': 'IXIC',
-        '다우존스': 'DJI',
-        '니케이225': 'N225',
-        '항셍지수': 'HSI'
-    }
-
-    cols = st.columns(len(index_codes))
-    for i, (name, code) in enumerate(index_codes.items()):
-        try:
-            df = fdr.DataReader(code, start_date, end_date)
-            delta = df['Close'].pct_change().iloc[-1] * 100
-            cols[i].metric(label=name, value=f"{df['Close'].iloc[-1]:,.2f}", delta=f"{delta:.2f}%")
-        except Exception as e:
-            cols[i].error(f"{name} 지수 오류: {e}")
-    
-    st.markdown("---")
-    
-    # 2. 거래실적 데이터 표시
-    display_trading_value(start_date, end_date)
-    
-    # 3. 환율 & 원자재 시세
-    st.markdown("#### 💱 환율 및 원자재 가격")
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("##### 환율")
-        fx_codes = {'미국 달러 (USD/KRW)': 'USD/KRW', '일본 엔화 (JPY/KRW)': 'JPY/KRW'}
-        for label, code in fx_codes.items():
-            try:
-                fx = fdr.DataReader(code, start_date, end_date)
-                if not fx.empty:
-                    st.line_chart(fx['Close'].rename(label), height=150)
-                else:
-                    st.warning(f"{label} 데이터가 존재하지 않습니다.")
-            except Exception as e:
-                st.error(f"{label} 데이터 오류: {e}")
-
-    with col2:
-        st.markdown("##### 원자재")
-        cm_codes = {'서부텍사스산 원유 (WTI)': 'WTI', '금 (GOLD)': 'GOLD'}
-        for label, code in cm_codes.items():
-            try:
-                cm = fdr.DataReader(code, start_date, end_date)
-                if not cm.empty:
-                    st.line_chart(cm['Close'].rename(label), height=150)
-                else:
-                    st.warning(f"{label} 데이터가 존재하지 않습니다.")
-            except Exception as e:
-                st.error(f"{label} 데이터 오류: {e}")
-    
-    st.markdown("---")
-    
-    # 4. 개별 종목 조회
-    st.markdown("#### 🔍 개별 종목/ETF 조회")
-    code_input = st.text_input("종목코드, 티커 또는 종목명 입력 (예: 005930, AAPL, 삼성전자 등)", value="005930")
-    if code_input:
-        try:
-            # 입력값이 티커/코드가 아닌 경우 종목명으로 검색
-            if not any(c.isdigit() for c in code_input) and not code_input.isupper():
-                ticker = get_ticker_from_name(code_input)
-                if ticker:
-                    st.info(f"'{code_input}'의 티커/코드: {ticker}")
-                    code_input = ticker
-                else:
-                    st.warning(f"'{code_input}'에 해당하는 종목을 찾을 수 없습니다.")
-                    return
-
-            df_stock = fdr.DataReader(code_input, start_date, end_date)
-            if df_stock.empty:
-                st.warning(f"{code_input}에 대한 데이터가 없습니다.")
-            else:
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df_stock.index, y=df_stock['Close'], mode='lines', name='종가'))
-                fig.update_layout(title=f"{code_input} 주가 추이", xaxis_title="날짜", yaxis_title="가격")
-                st.plotly_chart(fig, use_container_width=True)
-
-                with st.expander("📊 기술적 지표 보기"):
-                    df_stock['SMA20'] = df_stock['Close'].rolling(window=20).mean()
-                    df_stock['SMA60'] = df_stock['Close'].rolling(window=60).mean()
-                    df_stock['EMA20'] = df_stock['Close'].ewm(span=20).mean()
-                    df_stock['EMA60'] = df_stock['Close'].ewm(span=60).mean()
-
-                    delta = df_stock['Close'].diff()
-                    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                    rs = gain / loss
-                    df_stock['RSI'] = 100 - (100 / (1 + rs))
-
-                    ema12 = df_stock['Close'].ewm(span=12).mean()
-                    ema26 = df_stock['Close'].ewm(span=26).mean()
-                    df_stock['MACD'] = ema12 - ema26
-                    df_stock['Signal'] = df_stock['MACD'].ewm(span=9).mean()
-
-                    fig2 = go.Figure()
-                    fig2.add_trace(go.Scatter(x=df_stock.index, y=df_stock['Close'], name='종가'))
-                    fig2.add_trace(go.Scatter(x=df_stock.index, y=df_stock['SMA20'], name='SMA20'))
-                    fig2.add_trace(go.Scatter(x=df_stock.index, y=df_stock['SMA60'], name='SMA60'))
-                    fig2.add_trace(go.Scatter(x=df_stock.index, y=df_stock['EMA20'], name='EMA20'))
-                    fig2.add_trace(go.Scatter(x=df_stock.index, y=df_stock['EMA60'], name='EMA60'))
-                    fig2.update_layout(title=f"{code_input} 이동평균선 비교", xaxis_title="날짜", yaxis_title="가격")
-                    st.plotly_chart(fig2, use_container_width=True)
-
-                    fig3 = go.Figure()
-                    fig3.add_trace(go.Scatter(x=df_stock.index, y=df_stock['MACD'], name='MACD'))
-                    fig3.add_trace(go.Scatter(x=df_stock.index, y=df_stock['Signal'], name='Signal'))
-                    fig3.update_layout(title=f"{code_input} MACD", xaxis_title="날짜", yaxis_title="값")
-                    st.plotly_chart(fig3, use_container_width=True)
-
-                    fig4 = go.Figure()
-                    fig4.add_trace(go.Scatter(x=df_stock.index, y=df_stock['RSI'], name='RSI'))
-                    fig4.add_hline(y=70, line=dict(dash='dash', color='red'))
-                    fig4.add_hline(y=30, line=dict(dash='dash', color='green'))
-                    fig4.update_layout(title=f"{code_input} RSI", xaxis_title="날짜", yaxis_title="RSI 값")
-                    st.plotly_chart(fig4, use_container_width=True)
-
-        except Exception as e:
-            st.error(f"{code_input} 데이터 조회 중 오류가 발생했습니다: {e}")
-
 def extract_stock_names(text):
     """텍스트에서 종목명 추출"""
     # 종목명 패턴 (한글 2-10자)
     pattern = r'[가-힣]{2,10}(?:주식|증권|기업|회사|주)'
     matches = re.findall(pattern, text)
     return [match.replace('주식', '').replace('증권', '').replace('기업', '').replace('회사', '').replace('주', '') for match in matches]
-
 
 def search_stock_news(keywords, start_date, end_date, max_articles):
     """특징주 관련 뉴스 검색"""
@@ -1213,9 +1071,9 @@ def search_stock_news(keywords, start_date, end_date, max_articles):
 
 def display_stock_news_tab():
     """특징주 포착 탭 표시"""
-    st.markdown("### 📈 특징주 포착")
+    st.markdown("### 🔍 특징주 포착")
     
-    # 검색 키워드 선택
+    # 기본 키워드 목록
     default_keywords = ["특징주", "급등주", "상한가", "하한가", "급등세", "급락세", 
                        "강세", "약세", "거래량 증가", "신고가", "신저가"]
     
@@ -1313,12 +1171,13 @@ def display_stock_news_tab():
                     stock_data = df[df['종목명'] == stock_name]
                     if not stock_data.empty:
                         stock = stock_data.iloc[0]
+                        
                         # 결과 데이터 구성
                         result = {
                             '종목명': stock['종목명'],
                             '시장구분': market,
                             '업종': stock['업종'],
-                            '주요제품': stock['주요제품'],  # 주요제품 컬럼 추가
+                            '주요제품': stock['주요제품'],
                             '현재가': stock['종가'],
                             '등락률': stock['등락률'],
                             '거래량': stock['거래량'],
@@ -1337,52 +1196,26 @@ def display_stock_news_tab():
                         
                         results.append(result)
             
-            # 5. 검색 결과 통계 표시
-            st.markdown("### 📊 검색 결과 통계")
-            col1, col2 = st.columns(2)
+            # 세션 상태에 저장
+            st.session_state['stock_news_data'] = results
+            st.session_state['stock_news_filtered_data'] = results
+            st.session_state['stock_news_date'] = selected_date
+            st.session_state['stock_news_keywords'] = selected_keywords
+            st.session_state['stock_news_keyword_counts'] = keyword_article_counts
+            st.session_state['stock_news_matched_stocks'] = set(matched_stocks)
             
-            with col1:
-                st.markdown("#### 키워드별 기사 수")
-                for keyword, count in keyword_article_counts.items():
-                    st.write(f"- {keyword}: {count}개")
-            
-            with col2:
-                st.markdown("#### 매칭된 종목 수")
-                st.write(f"- 총 {len(matched_stocks)}개 종목이 매칭되었습니다.")
-                # 종목별 기사 수 분포
-                article_counts = [len(articles) for articles in stock_articles.values()]
-                if article_counts:
-                    st.write(f"- 평균 {sum(article_counts)/len(article_counts):.1f}개의 기사가 매칭되었습니다.")
-                    st.write(f"- 최대 {max(article_counts)}개의 기사가 매칭된 종목이 있습니다.")
-            
-            # 6. 결과 표시
-            if results:
-                st.markdown("### 📈 매칭된 종목 정보")
-                df_results = pd.DataFrame(results)
-                
-                # 데이터 포맷팅
-                df_results['현재가'] = df_results['현재가'].apply(lambda x: f"{x:,}원")
-                df_results['등락률'] = df_results['등락률'].apply(lambda x: f"{x:.2f}%")
-                df_results['거래량'] = df_results['거래량'].apply(lambda x: f"{x:,}")
-                df_results['시가총액'] = df_results['시가총액'].apply(lambda x: f"{x/100000000:.0f}억원")
-                
-                # 결과 테이블 표시
-                st.dataframe(
-                    df_results,
-                    use_container_width=True,
-                    hide_index=True
-                )
-                
-                # CSV 다운로드
-                csv = df_results.to_csv(index=False).encode('utf-8-sig')
-                st.download_button(
-                    label="📥 CSV 다운로드",
-                    data=csv,
-                    file_name=f"stock_news_{selected_date.strftime('%Y%m%d')}.csv",
-                    mime="text/csv"
-                )
-            else:
-                st.warning("검색 결과가 없습니다.")
+            # 결과 표시
+            display_stock_news_results(results, selected_keywords, keyword_article_counts, matched_stocks, selected_date)
+    else:
+        # 저장된 데이터가 있으면 표시
+        if st.session_state['stock_news_data'] is not None:
+            display_stock_news_results(
+                st.session_state['stock_news_data'],
+                st.session_state['stock_news_keywords'],
+                st.session_state['stock_news_keyword_counts'],
+                set(st.session_state['stock_news_matched_stocks']),
+                st.session_state['stock_news_date']
+            )
 
 # secrets 확인 (보안)
 api_available, missing_secrets = check_secrets()
