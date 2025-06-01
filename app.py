@@ -22,7 +22,7 @@ import re
 
 # 페이지 설정
 st.set_page_config(
-    page_title="신문 기사 수집기",
+    page_title="경제적 자유 프로젝트",
     page_icon="📰",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -1252,7 +1252,7 @@ def display_stock_news_tab():
     
     # 최대 기사 수 입력
     max_articles = st.number_input(
-        "최대 기사 수",
+        "최대 기사 수(1000개 이하)",
         min_value=10,
         max_value=1000,
         value=100,
