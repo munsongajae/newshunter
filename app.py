@@ -992,13 +992,13 @@ with st.sidebar:
         default_index=0,
         styles={
             "container": {"padding": "0!important", "background-color": "transparent"},
-            "icon": {"color": "white", "font-size": "16px"},
+            "icon": {"color": "black", "font-size": "16px"},
             "nav-link": {
                 "font-size": "16px",
                 "text-align": "left",
                 "margin": "0px",
                 "padding": "10px",
-                "color": "white",
+                "color": "black",
                 "background-color": "transparent",
                 "border": "none",
                 "border-radius": "0px",
